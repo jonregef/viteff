@@ -1,42 +1,21 @@
+import logging
+
 from einops import rearrange
 from torch import nn, Tensor
-import torch
+from torch.nn.attention.varlen import varlen_attn
 from torchao.sparsity.training import SemiSparseActivationLinear
+import torch
+import torch.nn.attention as attn
 
-try:
-    from flash_attn.cute import flash_attn_varlen_func
-
-    def varlen_attn(
-        query: Tensor,
-        key: Tensor,
-        value: Tensor,
-        cu_seq_q: Tensor,
-        cu_seq_k: Tensor,
-        max_q: int,
-        max_k: int,
-        scale: float,
-        window_size: tuple[int, int],
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        return flash_attn_varlen_func(
-            q=query,
-            k=key,
-            v=value,
-            cu_seqlens_q=cu_seq_q,
-            cu_seqlens_k=cu_seq_k,
-            max_seqlen_q=max_q,
-            max_seqlen_k=max_k,
-            causal=window_size == (-1, 0),
-            softmax_scale=scale,
-        )
-except ImportError:
-    from torch.nn.attention import (
-        list_flash_attention_impls,
-        current_flash_attention_impl,
-    )
-
-    print(f"Available Flash Impls: {list_flash_attention_impls()}")
-    print(f"Currently active Flash version: {current_flash_attention_impl()}")
-    from torch.nn.attention.varlen import varlen_attn
+available = attn.list_flash_attention_impls()
+if available:
+    try:
+        major, minor = torch.cuda.get_device_capability()
+        attn.activate_flash_attention_impl(available[-1 if major > 8 else 0])
+        logging.debug(f"Activated {attn.current_flash_attention_impl()} backend")
+    except ModuleNotFoundError:
+        logging.warning("Failed to set flash attention backend, using fallback")
+        pass
 
 
 def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
@@ -92,7 +71,7 @@ class VarlenAttention(nn.Module):
         q, k, v = qkv.unbind(0)  # each (total_tokens, h, d)
         q, k = self.q_norm(q), self.k_norm(k)
 
-        if rope_cos is not None:
+        if rope_cos is not None and rope_sin is not None:
             # Broadcast RoPE over head dim: (total_tokens, 1, head_dim)
             cos, sin = rope_cos.unsqueeze(1), rope_sin.unsqueeze(1)
             q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)

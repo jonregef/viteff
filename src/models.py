@@ -2,6 +2,7 @@ from typing import Literal
 
 from torch import nn, Tensor
 from torchao.float8 import convert_to_float8_training
+import torch
 
 from .attention import VarlenBlock
 from .config import ModelConfig, ClassificationConfig
@@ -11,6 +12,26 @@ from .heads.classification import (
     AttentionPoolingClassifier,
 )
 from .patchifier import PatchifierOutput, VarlenPatchifier
+
+
+class Preprocessor(nn.Module):
+    def __init__(
+        self, mean: list[float] | None = None, std: list[float] | None = None
+    ) -> None:
+        super().__init__()
+        self.register_buffer(
+            "mean", torch.tensor(mean or [0.5], dtype=torch.float).view(-1, 1, 1)
+        )
+        self.register_buffer(
+            "std", torch.tensor(std or [0.5], dtype=torch.float).view(-1, 1, 1)
+        )
+
+    @torch.compiler.disable
+    def forward(self, images: list[Tensor]) -> list[Tensor]:  # type: ignore
+        return [
+            (image.to(self.mean.dtype) / 255.0 - self.mean) / self.std  # type: ignore
+            for image in images
+        ]
 
 
 class VarlenVisionTransformer(nn.Module):
@@ -30,6 +51,7 @@ class VarlenVisionTransformer(nn.Module):
         super().__init__()
         self.dim = dim
         self.registers = registers
+        self.preprocessor = Preprocessor()
         self.patchifier = VarlenPatchifier(
             in_channels=in_channels,
             patch_size=patch_size,
@@ -47,7 +69,7 @@ class VarlenVisionTransformer(nn.Module):
         self.out_norm = nn.RMSNorm(dim)
 
     def forward(self, images: list[Tensor]) -> tuple[Tensor, PatchifierOutput]:
-        p: PatchifierOutput = self.patchifier(images)
+        p: PatchifierOutput = self.patchifier(self.preprocessor(images))
         x = p.tokens
         del p.tokens
         for block in self.blocks:
@@ -95,6 +117,7 @@ class ClassificationViT(nn.Module):
 
 
 def build_model(max_seq_len: int, use_fp8: bool, config: ModelConfig) -> nn.Module:
+    assert config.dim and config.layers and config.atten_heads and config.registers
     backbone = VarlenVisionTransformer(
         dim=config.dim,
         layers=config.layers,
@@ -116,9 +139,7 @@ def build_model(max_seq_len: int, use_fp8: bool, config: ModelConfig) -> nn.Modu
         case _:
             raise NotImplementedError()
 
-    model.to("cuda")
     if use_fp8:
-        model = convert_to_float8_training(
-            model, module_filter_fn=lambda m: type(m) is nn.Linear
-        )
+        is_linear = lambda m, _: type(m) is nn.Linear  # noqa: E731
+        model = convert_to_float8_training(model, module_filter_fn=is_linear)
     return model

@@ -93,12 +93,14 @@ class VarlenPatchifier(nn.Module):
         coords = rearrange(torch.stack([ys, xs], dim=-1), "hp wp two -> (hp wp) two")
         return patches, coords
 
-    def forward(self, images: list[Tensor]) -> PatchifierOutput:
+    @torch.compiler.disable
+    def forward(self, images: list[Tensor]) -> PatchifierOutput:  # type: ignore
         batch_size, device = len(images), images[0].device
         patch_budget = max(
             1, (self.max_seq_len - batch_size * self.num_registers) // batch_size
         )
         raw_patches_list, patch_coords_list, patch_hw, patch_seqlens = [], [], [], []
+        patches, coords, Hp, Wp = None, None, None, None
         for img in images:
             _, height, width = img.shape
             match self.method if self.method != "random" else choice(self.methods):
@@ -121,7 +123,7 @@ class VarlenPatchifier(nn.Module):
             raw_patches_list.append(patches)
             patch_coords_list.append(coords)
             patch_hw.append((Hp, Wp))
-            patch_seqlens.append(patches.shape[0])
+            patch_seqlens.append(patches.shape[0] if patches else 0)
 
         projected = self.proj(torch.cat(raw_patches_list, dim=0))  # (sum_patches, D)
         all_patch_coords = torch.cat(patch_coords_list, dim=0)

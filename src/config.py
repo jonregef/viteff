@@ -17,13 +17,16 @@ class DataConfig(BaseModel):
     train_shards: str = "./data/train-*.tar"
     valid_shards: str = "./data/val-*.tar"
     batch_size: int | list[int] = Field(
-        256,
+        default=256,
         description="Use a list (along with milestones) to enable curriculum learning (image resolution will adapt to keep the number of patches under but close to max_seq_len).",
     )
     milestones: list[int] | None = Field(
-        None, description="Curriculum milestones in global unit (must begin with 0)"
+        default=None,
+        description="Curriculum milestones in global unit (must begin with 0).",
     )
-    max_seq_len: int = Field(65_536, description="Set to maximize GPU utilization.")
+    max_seq_len: int = Field(
+        default=65_536, description="Set to maximize GPU utilization."
+    )
     threads: int = 16
 
     @model_validator(mode="after")
@@ -157,7 +160,7 @@ class RunConfig(BaseSettings, cli_parse_args=True, cli_implicit_flags=True):
     @classmethod
     def settings_customise_sources(
         cls,
-        settings_cls: type["RunConfig"],
+        settings_cls: type[BaseSettings],
         init_settings: PydanticBaseSettingsSource,
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,

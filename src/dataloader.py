@@ -1,14 +1,16 @@
-from pathlib import Path
-from typing import cast
+"""https://facebookresearch.github.io/spdl/main/generated/imagenet_classification.html"""
 
-from spdl.pipeline import Pipeline, PipelineBuilder
-from spdl.pipeline.defs import Aggregator
+# from spdl.dataloader import DataLoader  # TODO
+# import spdl.io
+from functools import partial
+
 from torch import nn, Tensor
+from torchvision.io import decode_image, ImageReadMode
 from torchvision.transforms import v2 as T
-from torchvision.transforms.v2 import functional as TF
-import spdl.io
+import torchvision.transforms.v2.functional as TF
+from webdataset.compat import WebDataset
+from webdataset.handlers import warn_and_continue
 import torch
-import webdataset as wds
 
 
 class CapLongestEdge(nn.Module):
@@ -18,10 +20,7 @@ class CapLongestEdge(nn.Module):
 
     def forward(self, img: Tensor) -> Tensor:
         _, h, w = img.shape
-        m = max(h, w)
-        if m <= self.max_size:
-            return img
-        s = self.max_size / m
+        s = min(self.max_size / max(h, w), 1.0)
         return TF.resize(img, [round(h * s), round(w * s)], antialias=True)
 
 
@@ -29,75 +28,57 @@ train_transform = T.Compose(
     [
         CapLongestEdge(max_size=1024),
         T.RandomHorizontalFlip(p=0.5),
-        T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.05),
         T.RandomGrayscale(p=0.1),
-        T.ToDtype(torch.float32, scale=True),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        # T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=None),
     ]
 )
 
-val_transform = T.Compose(
-    [
-        CapLongestEdge(max_size=1024),
-        T.ToDtype(torch.float32, scale=True),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
+val_transform = T.Compose([CapLongestEdge(max_size=1024)])
 
 
-_rgb = spdl.io.get_video_filter_desc(pix_fmt="rgb24")
+def decode(sample: tuple[bytes, bytes], transform: T.Transform) -> tuple[Tensor, int]:
+    img_bytes, label = sample
+    img_tensor = decode_image(
+        torch.frombuffer(bytearray(img_bytes), dtype=torch.uint8),
+        mode=ImageReadMode.RGB,
+    )
+    return transform(img_tensor), int(label)
 
 
-def _decode_jpeg(jpg: bytes) -> Tensor:
-    packets = spdl.io.demux_image(jpg)
-    frames = spdl.io.decode_packets(packets, filter_desc=_rgb)
-    tensor = spdl.io.to_torch(spdl.io.convert_frames(frames))
-    return tensor.permute(2, 0, 1).contiguous()
+def collate(batch: list[tuple[Tensor, int]]):
+    images, labels = zip(*batch)
+    return list(images), torch.tensor(labels, dtype=torch.int64)
 
 
-def _make_decode(transform: T.Compose):
-    def decode_one(item: tuple[bytes, int]) -> tuple[Tensor, int]:
-        jpg, label = item
-        return transform(_decode_jpeg(jpg)), int(label)
-
-    return decode_one
-
-
-def _collate(batch: list[tuple[Tensor, int]]) -> tuple[list[Tensor], Tensor]:
-    # Pin in the SPDL thread so the training loop's .to(..., non_blocking=True) is truly async.
-    # Keeping .to("cuda") out of this thread avoids forcing CUDA init on non-main threads.
-    imgs, labels = zip(*batch)
-    imgs = [cast(Tensor, img).pin_memory() for img in imgs]
-    labels = torch.tensor(labels, dtype=torch.long).pin_memory()
-    return imgs, labels
-
-
-def build_pipeline(
-    urls: list[str] | list[Path],
-    batch_size: int | Aggregator,
-    threads: int,
-    transform: T.Transform,
+def build_imagenet_dataloader(
+    paths: list[str],
     train: bool,
-    seed: int,
-    distributed: bool = False,
-) -> Pipeline:
-    dataset = wds.WebDataset(
-        urls,
+    batch_size: int,
+    transform: T.Transform,
+    threads: int = 8,
+    seed: int = 42,
+):
+    dataset = WebDataset(
+        paths,
         shardshuffle=256 if train else False,
-        nodesplitter=wds.split_by_node if distributed else None,
-        handler=wds.warn_and_continue,
+        handler=warn_and_continue,
         detshuffle=True,
         seed=seed,
     )
-    if train:
-        dataset = dataset.shuffle(5000)
-    pipeline = (
-        PipelineBuilder()
-        .add_source(iter(dataset.to_tuple("jpg", "cls")))
-        .pipe(_make_decode(transform), concurrency=threads)
-        .aggregate(batch_size)
-        .pipe(_collate)
-        .add_sink(4)
-        .build(num_threads=threads)
+    dataset = dataset.to_tuple("jpg", "cls").map(
+        partial(decode, transform=transform), handler=warn_and_continue
     )
-    return pipeline
+
+    if train:
+        dataset = dataset.shuffle(1024, seed=seed)
+    return torch.utils.data.DataLoader(
+        dataset,  # type:ignore
+        batch_size=batch_size,
+        num_workers=threads,
+        collate_fn=collate,
+        # pin_memory=True,
+        drop_last=train,
+        # webdataset handles shuffling internally; persistent workers
+        # avoid re-initializing the shard iterator each epoch
+        persistent_workers=threads > 0,
+    )

@@ -1,7 +1,7 @@
 # ViTEff: Vision Transformer (Efficient)
 (Work in progress)
 
-Fast ViT training on modern stack (blackwell GPUs with CUDA 13.0).
+Fast ViT training on modern stack (blackwell GPUs with CUDA 13).
 
 ## Acceleration
 - [x] `torch.compile`

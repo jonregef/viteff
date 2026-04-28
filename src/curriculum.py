@@ -14,6 +14,7 @@ class BatchSizeCurriculum(Aggregator):
         if isinstance(batch_sizes, int):
             self.sizes, self.milestones = [batch_sizes], [0]
         else:
+            assert milestones is not None
             self.sizes, self.milestones = batch_sizes, milestones
         self.now = now
         self._buffer: list = []

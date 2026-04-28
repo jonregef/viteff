@@ -17,7 +17,7 @@ class APE(nn.Module):
 
     def forward(self, coords: Tensor) -> Tensor:
         assert coords.shape[-1] == self.axes  # coords: (N, n_axes)
-        ang = coords.float().unsqueeze(-1) * self.omega  # (N, n_axes, freq_dim)
+        ang = coords.unsqueeze(-1) * self.omega  # (N, n_axes, freq_dim)
         enc = rearrange(
             torch.stack([ang.sin(), ang.cos()], dim=-1),  # (N, n_axes, freq_dim, 2)
             "n ax d sc -> n (ax d sc)",  # axis-blocked, sin before cos
@@ -39,7 +39,7 @@ class RoPE(nn.Module):
 
     def forward(self, coords: Tensor) -> tuple[Tensor, Tensor]:
         assert coords.shape[-1] == self.axes  # coords: (N, n_axes)
-        ang = coords.float().unsqueeze(-1) * self.inv_freq  # (N, axes, freq_dim)
+        ang = coords.unsqueeze(-1) * self.inv_freq  # (N, axes, freq_dim)
         # (N, freq_dim*axes), axis-major interleave
         half = rearrange(ang, "n ax d -> n (d ax)")
         cos = repeat(half.cos(), "n d -> n (r d)", r=2)
