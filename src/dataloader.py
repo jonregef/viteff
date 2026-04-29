@@ -47,7 +47,7 @@ def decode(sample: tuple[bytes, bytes], transform: T.Transform) -> tuple[Tensor,
 
 def collate(batch: list[tuple[Tensor, int]]):
     images, labels = zip(*batch)
-    return list(images), torch.tensor(labels, dtype=torch.int64)
+    return [img.contiguous() for img in images], torch.tensor(labels, dtype=torch.int64)
 
 
 def build_imagenet_dataloader(
@@ -76,7 +76,8 @@ def build_imagenet_dataloader(
         batch_size=batch_size,
         num_workers=threads,
         collate_fn=collate,
-        # pin_memory=True,
+        pin_memory=True,
+        prefetch_factor=4,
         drop_last=train,
         # webdataset handles shuffling internally; persistent workers
         # avoid re-initializing the shard iterator each epoch

@@ -166,6 +166,8 @@ def train(config: RunConfig) -> None:
     while not done():
         if config.unit == "epoch":
             scheduler.step(epoch)
+        
+        optimizer.zero_grad(set_to_none=True)  # Needed?
         for images, labels in dataloader:
             images = [_.to(device="cuda", non_blocking=True) for _ in images]
             labels = labels.to(device="cuda")
