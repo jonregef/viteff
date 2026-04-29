@@ -123,7 +123,7 @@ class VarlenPatchifier(nn.Module):
             raw_patches_list.append(patches)
             patch_coords_list.append(coords)
             patch_hw.append((Hp, Wp))
-            patch_seqlens.append(patches.shape[0] if patches else 0)
+            patch_seqlens.append(patches.shape[0] if patches is not None else 0)
 
         projected = self.proj(torch.cat(raw_patches_list, dim=0))  # (sum_patches, D)
         all_patch_coords = torch.cat(patch_coords_list, dim=0)

@@ -171,7 +171,7 @@ def train(config: RunConfig) -> None:
             labels = labels.to(device="cuda")
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 logits = compiled(images)
-                loss: Tensor = model.loss(logits, labels)  # type: ignore
+                loss: Tensor = compiled.loss(logits, labels)  # type: ignore
             if config.unit == "step":
                 scheduler.step_update(num_updates=step)
             optimizer.zero_grad(set_to_none=True)

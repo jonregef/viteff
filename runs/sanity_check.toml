@@ -1,0 +1,49 @@
+precision = "bf16"
+unit = "step"
+clip_gradients = 0.1
+
+[data]
+train_shards = "./imagenet/imagenet1k-train-*.tar"
+valid_shards = "./imagenet/imagenet1k-validation-*.tar"
+batch_size = 256
+max_seq_len = 50_000
+threads = 16
+
+[model]
+size = "s"
+sparse = false
+patch_method = "resize"
+with_ape = false
+
+[model.head]
+task = "classification"
+method = "register"
+loss = "ce"
+classes = 1000
+smooth = 0.1
+
+[optimizer]
+learning_rate = 0.01
+weight_decay = 0.01
+momentum = 0.9
+nesterov = false
+algorithm = "adam"
+
+[scheduler]
+total = 1000
+warmup = 5
+
+[logging]
+frequency = 10
+directory = "./runs/logs"
+
+[checkpoint]
+frequency = 250
+directory = "./runs/checkpoints"
+
+[validation]
+frequency = 500
+batch_size = 256
+
+[ema]
+enabled = false
