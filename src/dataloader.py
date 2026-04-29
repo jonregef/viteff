@@ -1,13 +1,13 @@
 """https://facebookresearch.github.io/spdl/main/generated/imagenet_classification.html"""
 
 # from spdl.dataloader import DataLoader  # TODO
-# import spdl.io
 from functools import partial
+from typing import cast
 
 from torch import nn, Tensor
 from torchvision.io import decode_image, ImageReadMode
 from torchvision.transforms import v2 as T
-import torchvision.transforms.v2.functional as TF
+from torchvision.transforms.v2 import functional as TF
 from webdataset.compat import WebDataset
 from webdataset.handlers import warn_and_continue
 import torch
@@ -39,15 +39,15 @@ val_transform = T.Compose([CapLongestEdge(max_size=1024)])
 def decode(sample: tuple[bytes, bytes], transform: T.Transform) -> tuple[Tensor, int]:
     img_bytes, label = sample
     img_tensor = decode_image(
-        torch.frombuffer(bytearray(img_bytes), dtype=torch.uint8),
-        mode=ImageReadMode.RGB,
+        torch.frombuffer(bytearray(img_bytes), dtype=torch.uint8), ImageReadMode.RGB
     )
-    return transform(img_tensor), int(label)
+    img_tensor = cast(Tensor, transform(img_tensor)).contiguous()
+    return img_tensor, int(label)
 
 
 def collate(batch: list[tuple[Tensor, int]]):
     images, labels = zip(*batch)
-    return [img.contiguous() for img in images], torch.tensor(labels, dtype=torch.int64)
+    return list(images), torch.tensor(labels, dtype=torch.int64)
 
 
 def build_imagenet_dataloader(
@@ -74,12 +74,11 @@ def build_imagenet_dataloader(
     return torch.utils.data.DataLoader(
         dataset,  # type:ignore
         batch_size=batch_size,
-        num_workers=threads,
         collate_fn=collate,
-        pin_memory=True,
-        prefetch_factor=4,
         drop_last=train,
-        # webdataset handles shuffling internally; persistent workers
-        # avoid re-initializing the shard iterator each epoch
+        pin_memory=False,  # FIXME: pinning with variable-size images OOMs
+        num_workers=threads,
+        prefetch_factor=2,
         persistent_workers=threads > 0,
+        multiprocessing_context="forkserver",
     )

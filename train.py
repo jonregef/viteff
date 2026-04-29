@@ -1,12 +1,14 @@
+from contextlib import redirect_stdout
 from glob import glob
+import io
 import logging
 import time
 
 from pydantic_settings import CliApp
 from rich.logging import RichHandler
+from rich.text import Text
 from torch import Tensor, nn
 import torch
-import torch._dynamo
 import trackio
 
 logging.basicConfig(level=logging.DEBUG, format="%(message)s", handlers=[RichHandler()])
@@ -19,8 +21,6 @@ from src.dataloader import build_imagenet_dataloader, train_transform, val_trans
 from src.models import build_model
 from src.optimization import build_optimizer, build_scheduler
 from src.utils import seed_everything
-
-torch._dynamo.config.verbose = True
 
 
 @torch.inference_mode()
@@ -62,15 +62,18 @@ def validate(
 def train(config: RunConfig) -> None:
     logging.debug(config)
     seed_everything(config.seed)
-    trackio.init(
-        name=config.id,
-        project=config.logging.project,
-        group=config.logging.group,
-        resume="allow",
-        auto_log_gpu=True,
-        gpu_log_interval=60,
-        config=config.model_dump(),
-    )
+    f = io.StringIO()
+    with redirect_stdout(f):
+        trackio.init(
+            name=config.id,
+            project=config.logging.project,
+            group=config.logging.group,
+            resume="allow",
+            auto_log_gpu=True,
+            gpu_log_interval=60,
+            config=config.model_dump(),
+        )
+    logging.info(Text.from_ansi(f.getvalue().strip()))
     model = build_model(
         max_seq_len=config.data.max_seq_len,
         use_fp8=config.precision == "fp8",
@@ -116,9 +119,9 @@ def train(config: RunConfig) -> None:
         transform=train_transform,
         seed=config.seed,
     )
-    samples_seen, start_time, loss = 0, time.perf_counter(), torch.empty(0)
+    samples_seen, start_time = 0, time.perf_counter()
 
-    def hooks() -> None:
+    def hooks(loss: float) -> None:
         nonlocal samples_seen, start_time
         current = now()
         if current % config.logging.frequency == 0:
@@ -130,9 +133,9 @@ def train(config: RunConfig) -> None:
                 "samples_seen": samples_seen,
                 "elapsed": time.perf_counter() - start_time,
                 "throughput": throughput,
-                "loss": loss.item() if loss.numel() > 0 else None,
+                "loss": loss,
             }
-            logging.info(", ".join(f"{k}: {v}" for k, v in metrics.items()))
+            logging.info(", ".join(f"{k}: {v:.4g}" for k, v in metrics.items()))
             metrics.pop("step", None)
             trackio.log(metrics)
             samples_seen, start_time = 0, time.perf_counter()
@@ -166,7 +169,7 @@ def train(config: RunConfig) -> None:
     while not done():
         if config.unit == "epoch":
             scheduler.step(epoch)
-        
+        last_loss = 0.0
         optimizer.zero_grad(set_to_none=True)  # Needed?
         for images, labels in dataloader:
             images = [_.to(device="cuda", non_blocking=True) for _ in images]
@@ -178,6 +181,8 @@ def train(config: RunConfig) -> None:
                 scheduler.step_update(num_updates=step)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            last_loss = loss.item()
+            del loss, logits
             if config.clip_gradients is not None:
                 nn.utils.clip_grad_norm_(model.parameters(), config.clip_gradients)
             optimizer.step()
@@ -186,12 +191,12 @@ def train(config: RunConfig) -> None:
             samples_seen += len(images)
             step += 1
             if config.unit == "step":
-                hooks()
+                hooks(last_loss)
             if done():
                 break
         epoch += 1
         if config.unit == "epoch":
-            hooks()
+            hooks(last_loss)
 
 
 class _TrainingApp(RunConfig):
