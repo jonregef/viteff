@@ -126,8 +126,8 @@ def build_imagenet_dataloader(
             drop_last=train,
             pin_memory=False,  # FIXME: pinning with variable-size images OOMs
             num_workers=threads,
-            prefetch_factor=4,
-            persistent_workers=threads > 0,
+            prefetch_factor=4 if train else 1,
+            persistent_workers=train and threads > 0,
             multiprocessing_context="forkserver",
         )
     )
