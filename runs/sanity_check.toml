@@ -6,7 +6,7 @@ clip_gradients = 0.1
 train_shards = "./imagenet/imagenet1k-train-*.tar"
 valid_shards = "./imagenet/imagenet1k-validation-*.tar"
 batch_size = 256
-max_seq_len = 50_000
+max_seq_len = 100_000
 threads = 16
 
 [model]

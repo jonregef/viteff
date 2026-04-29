@@ -45,8 +45,6 @@ def validate(
     n = 0
     try:
         for images, labels in dataloader:
-            images = [_.to(device="cuda", non_blocking=True) for _ in images]
-            labels = labels.to(device="cuda")
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 logits = model(images)
                 batch = model.metrics(logits, labels)  # type: ignore
@@ -54,8 +52,9 @@ def validate(
                 totals[k] = totals.get(k, 0.0) + v.item()
             n += labels.size(0)
     finally:
-        if was_training:
-            model.train()
+        model.train(was_training)
+        del dataloader
+        torch.cuda.empty_cache()
     return {f"val/{k}": v / n for k, v in totals.items()}
 
 
@@ -172,8 +171,6 @@ def train(config: RunConfig) -> None:
         last_loss = 0.0
         optimizer.zero_grad(set_to_none=True)  # Needed?
         for images, labels in dataloader:
-            images = [_.to(device="cuda", non_blocking=True) for _ in images]
-            labels = labels.to(device="cuda")
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 logits = compiled(images)
                 loss: Tensor = compiled.loss(logits, labels)  # type: ignore

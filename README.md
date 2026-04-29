@@ -9,7 +9,7 @@ Fast ViT training on modern stack (blackwell GPUs with CUDA 13).
 - [x] varlen attention
 - [x] fp8 training
 - [x] semi-structured sparsity
-- [x] free-threaded dataloading
+- [ ] spdl dataloading
 
 ## Stability
 - [x] QK norm

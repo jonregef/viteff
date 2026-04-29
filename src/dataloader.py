@@ -50,6 +50,53 @@ def collate(batch: list[tuple[Tensor, int]]):
     return list(images), torch.tensor(labels, dtype=torch.int64)
 
 
+class CudaPrefetcher:
+    """Async copy of variable-size image batches to GPU."""
+
+    def __init__(
+        self,
+        loader: torch.utils.data.DataLoader,
+        device: torch.device = torch.device("cuda"),
+    ) -> None:
+        self.loader = loader
+        self.device = device
+        self.stream = torch.cuda.Stream(device)
+
+    def __iter__(self):
+        next_images, next_labels = None, None
+
+        def preload(images, labels):
+            with torch.cuda.stream(self.stream):
+                return (
+                    [
+                        img.pin_memory().to(self.device, non_blocking=True)
+                        for img in images
+                    ],
+                    labels.pin_memory().to(self.device, non_blocking=True),
+                )
+
+        it = iter(self.loader)
+        try:
+            images, labels = next(it)
+            next_images, next_labels = preload(images, labels)
+        except StopIteration:
+            return
+
+        for images, labels in it:
+            # Start transferring current batch while we prep next
+            torch.cuda.current_stream(self.device).wait_stream(self.stream)
+            cur_images, cur_labels = next_images, next_labels
+            next_images, next_labels = preload(images, labels)
+            yield cur_images, cur_labels
+
+        # Last batch
+        torch.cuda.current_stream(self.device).wait_stream(self.stream)
+        yield next_images, next_labels
+
+    def __len__(self):
+        return len(self.loader)
+
+
 def build_imagenet_dataloader(
     paths: list[str],
     train: bool,
@@ -71,14 +118,16 @@ def build_imagenet_dataloader(
 
     if train:
         dataset = dataset.shuffle(1024, seed=seed)
-    return torch.utils.data.DataLoader(
-        dataset,  # type:ignore
-        batch_size=batch_size,
-        collate_fn=collate,
-        drop_last=train,
-        pin_memory=False,  # FIXME: pinning with variable-size images OOMs
-        num_workers=threads,
-        prefetch_factor=2,
-        persistent_workers=threads > 0,
-        multiprocessing_context="forkserver",
+    return CudaPrefetcher(
+        torch.utils.data.DataLoader(
+            dataset,  # type:ignore
+            batch_size=batch_size,
+            collate_fn=collate,
+            drop_last=train,
+            pin_memory=False,  # FIXME: pinning with variable-size images OOMs
+            num_workers=threads,
+            prefetch_factor=4,
+            persistent_workers=threads > 0,
+            multiprocessing_context="forkserver",
+        )
     )
