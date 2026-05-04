@@ -17,7 +17,7 @@ for _ in ["cutlass", "torchao", "httpcore", "spdl", "filelock", "asyncio", "PIL"
 
 from src.config import RunConfig
 from src.curriculum import BatchSizeCurriculum
-from src.dataloader import build_webdataset_dataloader, train_augs, val_augs
+from src.dataloader import build_webdataset_dataloader, train_augs
 from src.models import build_model
 from src.optimization import build_optimizer, build_scheduler
 from src.utils import seed_everything
@@ -28,12 +28,7 @@ def validate(
     model: nn.Module, urls: list[str], batch_size: int, threads: int, seed: int
 ) -> dict[str, float]:
     dataloader = build_webdataset_dataloader(
-        urls,
-        batch_size=batch_size,
-        threads=threads,
-        augs=val_augs,
-        train=False,
-        seed=seed,
+        urls, batch_size=batch_size, threads=threads, augs=None, train=False, seed=seed
     )
     was_training = model.training
     model.eval()
@@ -161,17 +156,17 @@ def train(config: RunConfig) -> None:
     while not done():
         if config.unit == "epoch":
             scheduler.step(epoch)
-        last_loss = 0.0
+        last_loss = torch.zeros((), device="cuda")
         optimizer.zero_grad(set_to_none=True)  # Needed?
         for images, labels in dataloader:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 batch_metrics = compiled.forward_with_target(images, labels)  # type: ignore
-            loss = batch_metrics.pop("loss")
+            loss: Tensor = batch_metrics.pop("loss")
             if config.unit == "step":
                 scheduler.step_update(num_updates=step)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            last_loss = loss.item()
+            last_loss = loss.detach()
             if config.clip_gradients is not None:
                 nn.utils.clip_grad_norm_(model.parameters(), config.clip_gradients)
             optimizer.step()
@@ -179,12 +174,12 @@ def train(config: RunConfig) -> None:
                 model_ema.update_parameters(model)
             samples_seen += len(images)
             if config.unit == "step":
-                hooks(last_loss)
+                hooks(last_loss.item())
             step += 1
             if done():
                 break
         if config.unit == "epoch":
-            hooks(last_loss)
+            hooks(last_loss.item())
         epoch += 1
 
 
