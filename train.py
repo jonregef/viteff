@@ -12,12 +12,12 @@ import torch
 import trackio
 
 logging.basicConfig(level=logging.DEBUG, format="%(message)s", handlers=[RichHandler()])
-for _ in ["cutlass", "torchao", "httpcore", "spdl", "filelock", "asyncio"]:
+for _ in ["cutlass", "torchao", "httpcore", "spdl", "filelock", "asyncio", "PIL"]:
     logging.getLogger(_).setLevel(logging.WARNING)
 
 from src.config import RunConfig
 from src.curriculum import BatchSizeCurriculum
-from src.dataloader import build_imagenet_dataloader, train_transform, val_transform
+from src.dataloader import build_webdataset_dataloader, train_augs, val_augs
 from src.models import build_model
 from src.optimization import build_optimizer, build_scheduler
 from src.utils import seed_everything
@@ -25,17 +25,13 @@ from src.utils import seed_everything
 
 @torch.inference_mode()
 def validate(
-    model: nn.Module,
-    urls: list[str],
-    batch_size: int,
-    threads: int,
-    seed: int,
+    model: nn.Module, urls: list[str], batch_size: int, threads: int, seed: int
 ) -> dict[str, float]:
-    dataloader = build_imagenet_dataloader(
+    dataloader = build_webdataset_dataloader(
         urls,
         batch_size=batch_size,
         threads=threads,
-        transform=val_transform,
+        augs=val_augs,
         train=False,
         seed=seed,
     )
@@ -46,8 +42,7 @@ def validate(
     try:
         for images, labels in dataloader:
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                logits = model(images)
-                batch = model.metrics(logits, labels)  # type: ignore
+                batch = model.forward_with_target(images, labels)  # type: ignore
             for k, v in batch.items():
                 totals[k] = totals.get(k, 0.0) + v.item()
             n += labels.size(0)
@@ -110,12 +105,12 @@ def train(config: RunConfig) -> None:
     curriculum = BatchSizeCurriculum(
         config.data.batch_size, config.data.milestones, now
     )
-    dataloader = build_imagenet_dataloader(
+    dataloader = build_webdataset_dataloader(
         train_urls,
         train=True,
         batch_size=config.data.batch_size,  # type: ignore # FIXME
         threads=config.data.threads,
-        transform=train_transform,
+        augs=train_augs,
         seed=config.seed,
     )
     samples_seen, start_time = 0, time.perf_counter()
@@ -129,8 +124,6 @@ def train(config: RunConfig) -> None:
                 "step": step,
                 "epoch": epoch,
                 "batch_size": curriculum.at(current),
-                "samples_seen": samples_seen,
-                "elapsed": time.perf_counter() - start_time,
                 "throughput": throughput,
                 "loss": loss,
             }
@@ -172,28 +165,27 @@ def train(config: RunConfig) -> None:
         optimizer.zero_grad(set_to_none=True)  # Needed?
         for images, labels in dataloader:
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                logits = compiled(images)
-                loss: Tensor = compiled.loss(logits, labels)  # type: ignore
+                batch_metrics = compiled.forward_with_target(images, labels)  # type: ignore
+            loss = batch_metrics.pop("loss")
             if config.unit == "step":
                 scheduler.step_update(num_updates=step)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             last_loss = loss.item()
-            del loss, logits
             if config.clip_gradients is not None:
                 nn.utils.clip_grad_norm_(model.parameters(), config.clip_gradients)
             optimizer.step()
             if model_ema is not None:
                 model_ema.update_parameters(model)
             samples_seen += len(images)
-            step += 1
             if config.unit == "step":
                 hooks(last_loss)
+            step += 1
             if done():
                 break
-        epoch += 1
         if config.unit == "epoch":
             hooks(last_loss)
+        epoch += 1
 
 
 class _TrainingApp(RunConfig):

@@ -12,7 +12,7 @@ dependencies = [
     "torch>=2.11.0",
     "torchao>=0.17.0",
     "torchvision>=0.26.0",
-    "trackio>=0.23.0",
+    "trackio[gpu]>=0.23.0",
     "webdataset>=1.0.2",
     "flash-attn-4[cu13]",
 ]

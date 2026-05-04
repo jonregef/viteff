@@ -20,10 +20,10 @@ class Preprocessor(nn.Module):
     ) -> None:
         super().__init__()
         self.register_buffer(
-            "mean", torch.tensor(mean or [0.5], dtype=torch.float).view(-1, 1, 1)
+            "mean", torch.tensor(mean or [0.5], dtype=torch.float32).view(-1, 1, 1)
         )
         self.register_buffer(
-            "std", torch.tensor(std or [0.5], dtype=torch.float).view(-1, 1, 1)
+            "std", torch.tensor(std or [0.5], dtype=torch.float32).view(-1, 1, 1)
         )
 
     @torch.compiler.disable
@@ -47,6 +47,7 @@ class VarlenVisionTransformer(nn.Module):
         patch_size: int = 16,
         patch_method: Literal["resize", "drop", "random"] = "resize",
         with_ape: bool = False,
+        proj_drop: float = 0,
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -63,7 +64,7 @@ class VarlenVisionTransformer(nn.Module):
             with_ape=with_ape,
         )
         self.blocks = nn.ModuleList(
-            VarlenBlock(dim=dim, num_heads=atten_heads, sparse=sparse)
+            VarlenBlock(dim, num_heads=atten_heads, sparse=sparse, proj_drop=proj_drop)
             for _ in range(layers)
         )
         self.out_norm = nn.RMSNorm(dim)
@@ -88,6 +89,7 @@ class ClassificationViT(nn.Module):
         smooth: float = 0.0,
     ) -> None:
         super().__init__()
+        self.num_classes = num_classes
         self.backbone = backbone
         match method:
             case "register":
@@ -107,10 +109,18 @@ class ClassificationViT(nn.Module):
     def forward(self, images: list[Tensor]) -> Tensor:
         return self.head(*self.backbone(images))
 
-    def metrics(self, logits: Tensor, labels: Tensor) -> dict[str, Tensor]:
+    def forward_with_target(
+        self, images: list[Tensor], labels: Tensor
+    ) -> dict[str, Tensor]:
+        logits = self.forward(images)
+        if isinstance(self.loss, nn.BCEWithLogitsLoss) and len(labels.shape) == 1:
+            onehot = torch.nn.functional.one_hot(labels, self.num_classes).to(logits)
+            loss = self.loss(logits, onehot)
+        else:
+            loss = self.loss(logits, labels)
         top5_pred = logits.topk(min(5, logits.size(-1)), dim=-1).indices
         return {
-            "loss": self.loss(logits, labels),
+            "loss": loss,
             "top1": (top5_pred[:, 0] == labels).float().mean(),
             "top5": (top5_pred == labels.unsqueeze(-1)).any(-1).float().mean(),
         }
@@ -126,6 +136,7 @@ def build_model(max_seq_len: int, use_fp8: bool, config: ModelConfig) -> nn.Modu
         max_seq_len=max_seq_len,
         sparse=config.sparse,
         patch_method=config.patch_method,
+        proj_drop=config.proj_drop,
     )
     match config.head:
         case ClassificationConfig():

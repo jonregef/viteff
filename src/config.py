@@ -104,6 +104,7 @@ class ModelConfig(BaseModel):
     sparse: bool = False
     patch_method: Literal["resize", "drop", "random"] = "resize"
     with_ape: bool = False
+    proj_drop: float = 0.0
     head: ClassificationConfig | SegmentationConfig = Field(
         default_factory=ClassificationConfig, discriminator="task"
     )

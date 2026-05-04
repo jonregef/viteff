@@ -115,10 +115,11 @@ class VarlenBlock(nn.Module):
         mlp_ratio: float = 4.0,
         layerscale: float | None = 1e-4,
         sparse: bool = False,
+        proj_drop: float = 0,
     ) -> None:
         super().__init__()
         self.norm1 = nn.RMSNorm(dim)
-        self.attn = VarlenAttention(dim, num_heads)
+        self.attn = VarlenAttention(dim, num_heads, proj_drop=proj_drop)
         self.norm2 = nn.RMSNorm(dim)
         hidden = int(dim * mlp_ratio)
 

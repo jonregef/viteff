@@ -1,49 +1,51 @@
 precision = "bf16"
-unit = "step"
-clip_gradients = 0.1
+unit = "epoch"
+clip_gradients = 1.0
 
 [data]
 train_shards = "./imagenet/imagenet1k-train-*.tar"
 valid_shards = "./imagenet/imagenet1k-validation-*.tar"
-batch_size = 256
-max_seq_len = 100_000
+batch_size = 512
+max_seq_len = 2_000_000
 threads = 16
 
 [model]
 size = "s"
 sparse = false
 patch_method = "resize"
-with_ape = false
+with_ape = true
+proj_drop = 0.05
+registers = 5
 
 [model.head]
 task = "classification"
 method = "register"
-loss = "ce"
+loss = "bce"
 classes = 1000
-smooth = 0.1
 
 [optimizer]
-learning_rate = 0.01
-weight_decay = 0.01
+learning_rate = 0.005
+weight_decay = 0.05
 momentum = 0.9
-nesterov = false
-algorithm = "adam"
+nesterov = true
+algorithm = "muon"
 
 [scheduler]
-total = 1000
+total = 300
 warmup = 5
 
 [logging]
-frequency = 10
+frequency = 1
 directory = "./runs/logs"
 
 [checkpoint]
-frequency = 250
+frequency = 10
 directory = "./runs/checkpoints"
 
 [validation]
-frequency = 500
+frequency = 10
 batch_size = 256
 
 [ema]
-enabled = false
+enabled = true
+decay = 0.9999

@@ -24,7 +24,7 @@ class PatchifierOutput(BaseModel, arbitrary_types_allowed=True):
     patch_coords: Tensor  # (sum_N, 2) long
     rope_cos: Tensor  # (sum_N, head_dim)
     rope_sin: Tensor
-    is_patch: Tensor  # (sum_N,) bool — True=patch, False=prefix
+    is_patch: Tensor  # (sum_N,) bool
 
 
 class VarlenPatchifier(nn.Module):
