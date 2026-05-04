@@ -72,7 +72,6 @@ class VarlenVisionTransformer(nn.Module):
     def forward(self, images: list[Tensor]) -> tuple[Tensor, PatchifierOutput]:
         p: PatchifierOutput = self.patchifier(self.preprocessor(images))
         x = p.tokens
-        del p.tokens
         for block in self.blocks:
             x = block(x, p.cu_seqlens, p.max_seqlen, p.rope_cos, p.rope_sin)
         x = self.out_norm(x)

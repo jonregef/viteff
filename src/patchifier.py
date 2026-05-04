@@ -1,9 +1,9 @@
+from itertools import accumulate
 from math import sqrt
 from random import choice
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from einops import rearrange
-from pydantic import BaseModel
 from torch import nn, Tensor
 import torch
 
@@ -16,7 +16,7 @@ def resize(image: Tensor, size: tuple[int, int]) -> Tensor:
     )[0]
 
 
-class PatchifierOutput(BaseModel, arbitrary_types_allowed=True):
+class PatchifierOutput(NamedTuple):
     tokens: Tensor  # (sum_N, embed_dim)
     cu_seqlens: Tensor  # (B+1,) int32
     max_seqlen: int
@@ -25,6 +25,16 @@ class PatchifierOutput(BaseModel, arbitrary_types_allowed=True):
     rope_cos: Tensor  # (sum_N, head_dim)
     rope_sin: Tensor
     is_patch: Tensor  # (sum_N,) bool
+
+
+class _Pieces(NamedTuple):
+    raw_patches: list[Tensor]
+    coords: list[Tensor]
+    seqlens: list[int]  # patches per image, no registers
+    patch_hw: list[tuple[int, int]]
+    cu: Tensor  # (B+1,) int32, with registers
+    max_seqlen: int
+    denom: Tensor | None  # (B, 2) float32 for APE
 
 
 class VarlenPatchifier(nn.Module):
@@ -94,12 +104,12 @@ class VarlenPatchifier(nn.Module):
         return patches, coords
 
     @torch.compiler.disable
-    def forward(self, images: list[Tensor]) -> PatchifierOutput:  # type: ignore
+    def _get_pieces(self, images: list[Tensor]) -> _Pieces:
         batch_size, device = len(images), images[0].device
         patch_budget = max(
             1, (self.max_seq_len - batch_size * self.num_registers) // batch_size
         )
-        raw_patches_list, patch_coords_list, patch_hw, patch_seqlens = [], [], [], []
+        raw, coords_list, hw, seqlens = [], [], [], []
         patches, coords, Hp, Wp = None, None, None, None
         for img in images:
             _, height, width = img.shape
@@ -116,64 +126,80 @@ class VarlenPatchifier(nn.Module):
                     Wp = max(1, width // self.patch_size)
                     img = img[:, : Hp * self.patch_size, : Wp * self.patch_size]
                     patches, coords = self._patchify(img, Hp, Wp)
-                    if self.training and patches.shape[0] > patch_budget:
-                        idx = torch.randperm(patches.shape[0])[:patch_budget]
+                    num_patches = patches.shape[0]
+                    if self.training and num_patches > patch_budget:
+                        idx = torch.randperm(num_patches, device=device)[:patch_budget]
                         patches, coords = patches[idx], coords[idx]
 
-            raw_patches_list.append(patches)
-            patch_coords_list.append(coords)
-            patch_hw.append((Hp, Wp))
-            patch_seqlens.append(patches.shape[0] if patches is not None else 0)
+            raw.append(patches)
+            coords_list.append(coords)
+            hw.append((Hp, Wp))
+            seqlens.append(patches.shape[0] if patches is not None else 0)
 
-        projected = self.proj(torch.cat(raw_patches_list, dim=0))  # (sum_patches, D)
-        all_patch_coords = torch.cat(patch_coords_list, dim=0)
-        patch_cos, patch_sin = self.rope(all_patch_coords)
+        seqlens_with_reg = [self.num_registers + n for n in seqlens]
+        cu = torch.tensor(
+            [0, *accumulate(seqlens_with_reg)], dtype=torch.int32, device=device
+        )
+        denom: Tensor | None = None
         if self.ape is not None:
-            norm_parts = []
-            for coords_i, (Hp, Wp) in zip(patch_coords_list, patch_hw):
-                denom = torch.tensor(
-                    [max(Hp - 1, 1), max(Wp - 1, 1)], dtype=torch.float32, device=device
-                )
-                norm_parts.append(coords_i.float() / denom)
-            projected = projected + self.ape(torch.cat(norm_parts, dim=0))
+            denom = torch.tensor(
+                [[max(Hp - 1, 1), max(Wp - 1, 1)] for Hp, Wp in hw],
+                dtype=torch.float,
+                device=device,
+            )
+        return _Pieces(
+            raw_patches=raw,
+            coords=coords_list,
+            seqlens=seqlens,
+            patch_hw=hw,
+            cu=cu,
+            max_seqlen=max(seqlens_with_reg),
+            denom=denom,
+        )
 
-        # Assemble final sequence: [register, patches] per image.
+    @torch.compiler.disable
+    def forward(self, images: list[Tensor]) -> PatchifierOutput:  # type: ignore
+        pieces: _Pieces = self._get_pieces(images)  # type: ignore
+        device = images[0].device
+        projected = self.proj(torch.cat(pieces.raw_patches, dim=0))  # (sum_patches, D)
+        all_patch_coords = torch.cat(pieces.coords, dim=0)
+        patch_cos, patch_sin = self.rope(all_patch_coords)
+        if pieces.denom is not None and self.ape is not None:
+            seqlens_t = (pieces.cu.diff() - self.num_registers).to(torch.int64)
+            denom_per_token = pieces.denom.repeat_interleave(seqlens_t, dim=0)
+            projected = projected + self.ape(all_patch_coords / denom_per_token)
+
+        # Assemble final sequence: [registers, patches] per image.
         if self.num_registers > 0:
-            proj_pi = projected.split(patch_seqlens)
-            pcos_pi = patch_cos.split(patch_seqlens)
-            psin_pi = patch_sin.split(patch_seqlens)
+            proj_pi = projected.split(pieces.seqlens)
+            pcos_pi = patch_cos.split(pieces.seqlens)
+            psin_pi = patch_sin.split(pieces.seqlens)
             pref_cos, pref_sin = self.register_rope(self.register_positions)  # (P, D)
             tok, crd, cs, sn = [], [], [], []
-            for p, c, pc, ps in zip(proj_pi, patch_coords_list, pcos_pi, psin_pi):
-                tok += [self.registers, p]
+            for i, c, pc, ps in zip(proj_pi, pieces.coords, pcos_pi, psin_pi):
+                tok += [self.registers, i]
                 crd += [self.register_positions, c]
                 cs += [pref_cos, pc]
                 sn += [pref_sin, ps]
             tokens, patch_coords = torch.cat(tok, dim=0), torch.cat(crd, dim=0)
             rope_cos, rope_sin = torch.cat(cs, dim=0), torch.cat(sn, dim=0)
-            seqlens = [self.num_registers + n for n in patch_seqlens]
         else:
             tokens, patch_coords = projected, all_patch_coords
             rope_cos, rope_sin = patch_cos, patch_sin
-            seqlens = patch_seqlens
-
-        cu = torch.zeros(batch_size + 1, dtype=torch.int32, device=device)
-        cu[1:] = torch.tensor(seqlens, dtype=torch.int32, device=device).cumsum(0)
 
         is_patch = torch.ones(tokens.shape[0], dtype=torch.bool, device=device)
         if self.num_registers > 0:
-            starts = cu[:-1]  # (B,)
             offsets = torch.arange(self.num_registers, device=device)
-            prefix_idx = (starts[:, None] + offsets[None, :]).flatten()
-            is_patch[prefix_idx] = False  # registers are prefixes
+            prefix_idx = (pieces.cu[:-1].long()[:, None] + offsets[None, :]).flatten()
+            is_patch = is_patch.index_fill(0, prefix_idx, False)  # registers
 
         # pool patch tokens: output.tokens[output.is_patch]
         # specific register slot r: output.tokens[output.cu_seqlens[:-1] + r]
         return PatchifierOutput(
             tokens=tokens,
-            cu_seqlens=cu,
-            max_seqlen=max(seqlens),
-            patch_hw=patch_hw,
+            cu_seqlens=pieces.cu,
+            max_seqlen=pieces.max_seqlen,
+            patch_hw=pieces.patch_hw,
             patch_coords=patch_coords,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
