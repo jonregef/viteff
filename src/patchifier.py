@@ -79,6 +79,12 @@ class VarlenPatchifier(nn.Module):
             prefix_pos = torch.arange(num_registers)
             prefix_pos = torch.stack([prefix_pos, prefix_pos], dim=-1)
             self.register_buffer("register_positions", prefix_pos)
+            self.register_buffer(
+                "register_rope_cos", torch.ones(num_registers, self.head_dim)
+            )
+            self.register_buffer(
+                "register_rope_sin", torch.ones(num_registers, self.head_dim)
+            )
 
     def _shrink_grid(self, height: int, width: int, budget: int) -> tuple[int, int]:
         Hp_nat = max(1, height // self.patch_size)
@@ -174,7 +180,7 @@ class VarlenPatchifier(nn.Module):
             proj_pi = projected.split(pieces.seqlens)
             pcos_pi = patch_cos.split(pieces.seqlens)
             psin_pi = patch_sin.split(pieces.seqlens)
-            pref_cos, pref_sin = self.register_rope(self.register_positions)  # (P, D)
+            pref_cos, pref_sin = self.register_rope_cos, self.register_rope_sin
             tok, crd, cs, sn = [], [], [], []
             for i, c, pc, ps in zip(proj_pi, pieces.coords, pcos_pi, psin_pi):
                 tok += [self.registers, i]

@@ -38,9 +38,10 @@ def validate(
         for images, labels in dataloader:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 batch = model.forward_with_target(images, labels)  # type: ignore
+            batch_size = labels.size(0)
             for k, v in batch.items():
-                totals[k] = totals.get(k, 0.0) + v.item()
-            n += labels.size(0)
+                totals[k] = totals.get(k, 0.0) + v.item() * batch_size
+            n += batch_size
     finally:
         model.train(was_training)
         del dataloader
@@ -68,7 +69,7 @@ def train(config: RunConfig) -> None:
         use_fp8=config.precision == "fp8",
         config=config.model,
     )
-    model.to(device="cuda", dtype=torch.bfloat16)
+    model.to(device="cuda")
     logging.debug(model)
     model_ema = None
     if config.ema.enabled:
@@ -77,7 +78,7 @@ def train(config: RunConfig) -> None:
             multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(config.ema.decay),
             use_buffers=True,
         )
-    compiled = torch.compile(model, dynamic=True)
+    compiled = torch.compile(model.forward_with_target, dynamic=True)  # type: ignore
 
     train_urls = sorted(glob(config.data.train_shards))
     if not train_urls:
@@ -160,7 +161,7 @@ def train(config: RunConfig) -> None:
         optimizer.zero_grad(set_to_none=True)  # Needed?
         for images, labels in dataloader:
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                batch_metrics = compiled.forward_with_target(images, labels)  # type: ignore
+                batch_metrics = compiled(images, labels)  # type: ignore
             loss: Tensor = batch_metrics.pop("loss")
             if config.unit == "step":
                 scheduler.step_update(num_updates=step)

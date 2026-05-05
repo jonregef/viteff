@@ -69,13 +69,14 @@ class VarlenAttention(nn.Module):
             **dict(three=3, h=self.num_heads, d=self.head_dim),
         )
         q, k, v = qkv.unbind(0)  # each (total_tokens, h, d)
-        q, k = self.q_norm(q), self.k_norm(k)
+        q, k = self.q_norm(q.float()), self.k_norm(k.float())
 
         if rope_cos is not None and rope_sin is not None:
             # Broadcast RoPE over head dim: (total_tokens, 1, head_dim)
             cos, sin = rope_cos.unsqueeze(1), rope_sin.unsqueeze(1)
             q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
 
+        q, k = q.to(v.dtype), k.to(v.dtype)
         out = varlen_attn(
             *(q, k, v),
             cu_seq_q=cu_seqlens,

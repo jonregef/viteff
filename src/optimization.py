@@ -3,16 +3,16 @@ from typing import Literal
 from timm.optim.muon import Muon
 from timm.scheduler.cosine_lr import CosineLRScheduler
 from timm.scheduler.scheduler import Scheduler
-from torch import nn
+from torch import nn, Tensor
 from torch.optim import Optimizer
 
 
-def _no_decay(name: str, p) -> bool:
+def _no_decay(name: str, p: Tensor) -> bool:
     return name.endswith(".layer_scale") or name.endswith("registers")
 
 
-def _no_muon(name: str, p) -> bool:
-    return p.ndim < 2
+def _no_muon(name: str, p: Tensor) -> bool:
+    return p.ndim < 2 or name.endswith("registers")
 
 
 def build_optimizer(
