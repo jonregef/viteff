@@ -1,4 +1,5 @@
-from typing import Any
+from bisect import bisect_right
+from typing import Any, Callable
 import warnings
 
 from torch import nn, Tensor
@@ -13,6 +14,27 @@ warnings.filterwarnings(
     message=r".*The PyTorch API of nested tensors is in prototype stage.*",
     category=UserWarning,
 )
+
+# TODO: Augmentation curriculum (RandAugment/TrivialAugment etc...)
+
+
+class BatchSizeCurriculum:
+    def __init__(
+        self,
+        batch_sizes: list[int] | int,
+        milestones: list[int] | None,
+        now: Callable[[], int],
+    ) -> None:
+        if isinstance(batch_sizes, int):
+            self.sizes, self.milestones = [batch_sizes], [0]
+        else:
+            assert milestones is not None
+            self.sizes, self.milestones = batch_sizes, milestones
+        self.now = now
+
+    def at(self, idx: int) -> int:
+        i = bisect_right(self.milestones, idx) - 1
+        return self.sizes[max(i, 0)]
 
 
 @record_function("decoding")

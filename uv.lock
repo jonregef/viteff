@@ -1617,52 +1617,6 @@ wheels = [
 ]
 
 [[package]]
-name = "spdl"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "spdl-core" },
-    { name = "spdl-io" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/98/60/1111728d09136633f551ed2721c69f0bb60a990254aafae20f679215cd34/spdl-0.3.1-py3-none-any.whl", hash = "sha256:c718b2a957838c077c5f174281d78ce49102f928e0bbe9cf820e7f6ba5e672d1", size = 2564, upload-time = "2026-04-16T14:46:07.368Z" },
-]
-
-[[package]]
-name = "spdl-core"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/30/d6cb8eff86d63b808f82909d4fa2bf27b318750d86e195ea23c1431afcb3/spdl_core-0.3.1-py3-none-any.whl", hash = "sha256:bf90d21bf1a3776c3c694eef58dcec20d9bbfbacbacab34796d67645bb72244e", size = 112567, upload-time = "2026-04-16T14:47:21.999Z" },
-]
-
-[[package]]
-name = "spdl-io"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e6/5b/eab51ea18bc0f59f37e38a67438048ca2899c9dfd47328640531ac77f588/spdl_io-0.3.1-cp313-cp313-macosx_15_0_arm64.whl", hash = "sha256:800c75ff9dd98fccee00e06cada6f677c5c85754353164473dce59e831b96642", size = 6789234, upload-time = "2026-04-16T14:46:40.272Z" },
-    { url = "https://files.pythonhosted.org/packages/c3/30/1eceb410aad3847e8cfa6698ca3d9c9e9fda28285ce87da65e3d9cbd606c/spdl_io-0.3.1-cp313-cp313-manylinux_2_26_aarch64.whl", hash = "sha256:163164c3891a27504d4c82e039a061677260065733ab1a80f0ef8c536ff51d05", size = 8344917, upload-time = "2026-04-16T14:46:41.824Z" },
-    { url = "https://files.pythonhosted.org/packages/dc/a7/b6725b0bd52682757d5a8be41e9fdadaf433e042475ba67527bbf27eedec/spdl_io-0.3.1-cp313-cp313-manylinux_2_27_x86_64.whl", hash = "sha256:50f52613f0bd6c4896215305395cbce7e418bef70e649be645d15eb971637b15", size = 10707550, upload-time = "2026-04-16T14:46:43.787Z" },
-    { url = "https://files.pythonhosted.org/packages/26/3e/c6b442ef443ed44e94189cd27075fa47d35017997a04e049a78d6b7603d7/spdl_io-0.3.1-cp313-cp313-win_amd64.whl", hash = "sha256:768b226acd7a00671f5a52cf59449ff66a03a6af7d75c66cf3ffbbff7c0dd96f", size = 3947659, upload-time = "2026-04-16T14:46:46.068Z" },
-    { url = "https://files.pythonhosted.org/packages/02/cf/2ff016ba6c9d22289cfb9f3b9fed2b217848771001872c834bffb7c8c5eb/spdl_io-0.3.1-cp313-cp313t-macosx_15_0_arm64.whl", hash = "sha256:5fef411b48f4261e1a8514d7f7fedb3097e8a66516b5ed3c1d5860d74c45cede", size = 6831836, upload-time = "2026-04-16T14:46:47.797Z" },
-    { url = "https://files.pythonhosted.org/packages/1e/6e/e5827a169da9cc951c4113522bd8de15d19d3578dfc6c238fc2bca209c1d/spdl_io-0.3.1-cp313-cp313t-manylinux_2_26_aarch64.whl", hash = "sha256:e6967e3f7ee67605652f946665e59451f5c9beaecfd46f127317cd1093622079", size = 8377265, upload-time = "2026-04-16T14:46:49.421Z" },
-    { url = "https://files.pythonhosted.org/packages/41/d0/a42091e60c31e3020b8f9ca4df194c3714f99d85544d44898221f3895415/spdl_io-0.3.1-cp313-cp313t-manylinux_2_27_x86_64.whl", hash = "sha256:7c08f71321050d5f273df99a61c705bd97418d9db4ad4af4269299ea1065ed38", size = 10735803, upload-time = "2026-04-16T14:46:51.075Z" },
-    { url = "https://files.pythonhosted.org/packages/24/2e/fe5d8b412804916759a18712ddb1b6057befbca028dfc8e9498435723551/spdl_io-0.3.1-cp313-cp313t-win_amd64.whl", hash = "sha256:6e969d1cab04b186b5ab7003890332adf421e7f9dd807185d244765bfb0e1733", size = 4005016, upload-time = "2026-04-16T14:46:52.908Z" },
-    { url = "https://files.pythonhosted.org/packages/91/dd/128a568e7da69308e7244fdfb7064ba8513ece2c0eee46af2b5c0e82d44a/spdl_io-0.3.1-cp314-cp314-macosx_15_0_arm64.whl", hash = "sha256:9fa05dcba51d80ea1cdfdc2a00113cfae001f447415cf904d9f9905e2dd64bdf", size = 6790406, upload-time = "2026-04-16T14:46:54.558Z" },
-    { url = "https://files.pythonhosted.org/packages/db/12/d0ddac5a94f295f85144c1b87db07032642c6fcda893b75afdb29c6ccb3d/spdl_io-0.3.1-cp314-cp314-manylinux_2_26_aarch64.whl", hash = "sha256:ba38c1ec88a280afe7d88e6ff519abc8e296683e147f0830e602b208c303d02d", size = 8347220, upload-time = "2026-04-16T14:46:56.002Z" },
-    { url = "https://files.pythonhosted.org/packages/14/da/4563f97d89bd37f689ebca69c1e9a620d6ac23062097125bc4a021b521a7/spdl_io-0.3.1-cp314-cp314-manylinux_2_27_x86_64.whl", hash = "sha256:7d75ebae6cb47b7d5f5ff39cb700797082e3e5aee6a017993a4e7a6258fc73c0", size = 10707848, upload-time = "2026-04-16T14:46:57.648Z" },
-    { url = "https://files.pythonhosted.org/packages/6f/3a/7cff9567b9479722947cb0e987081e2f64b41bc7a45415985a3d8c3ec183/spdl_io-0.3.1-cp314-cp314-win_amd64.whl", hash = "sha256:8e12768e0a767fe8b9302682e8623ec2d0f280df015bc76c3feba617589c78b8", size = 4071181, upload-time = "2026-04-16T14:46:59.403Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/d0/ceec6192206135081dfd734fae513ca304876fccef81cf2995ea30ffb18b/spdl_io-0.3.1-cp314-cp314t-macosx_15_0_arm64.whl", hash = "sha256:5c5c15d338188aae0707cf87702db3c7385acd959d2a3d825a571ad9255c14f2", size = 6831845, upload-time = "2026-04-16T14:47:01.364Z" },
-    { url = "https://files.pythonhosted.org/packages/99/64/408649f707870cea94a3531af1b913eefd71d9de5856a249d1c17ef0f7eb/spdl_io-0.3.1-cp314-cp314t-manylinux_2_26_aarch64.whl", hash = "sha256:88dbc152e22b9b0f4af8c80dfff85b261a7c41103cde92dffdfb7ebf45cd1051", size = 8377189, upload-time = "2026-04-16T14:47:03.073Z" },
-    { url = "https://files.pythonhosted.org/packages/41/10/ef691eaea2e4303ee36ef4c14a6d01812ce971117f60849b3aacced45a34/spdl_io-0.3.1-cp314-cp314t-manylinux_2_27_x86_64.whl", hash = "sha256:13d4775f5f7cc8140a27499449b69a7e2002a6f5ed96cbd2a3c0b66115729309", size = 10735801, upload-time = "2026-04-16T14:47:04.715Z" },
-    { url = "https://files.pythonhosted.org/packages/af/31/dfb3a38272015f5135aefafb8ff8fc93fff34a8ef74a24b23b2094dc0cc4/spdl_io-0.3.1-cp314-cp314t-win_amd64.whl", hash = "sha256:abb7ebd07169b622ae436ced996e50c09bcaad3ed94ca8f29b5af0a1c72688a6", size = 4141114, upload-time = "2026-04-16T14:47:06.909Z" },
-]
-
-[[package]]
 name = "stack-data"
 version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1945,7 +1899,6 @@ dependencies = [
     { name = "einops" },
     { name = "flash-attn-4", extra = ["cu13"] },
     { name = "pydantic-settings" },
-    { name = "spdl" },
     { name = "timm" },
     { name = "torch" },
     { name = "torchao" },
@@ -1966,7 +1919,6 @@ requires-dist = [
     { name = "einops", specifier = ">=0.8.2" },
     { name = "flash-attn-4", extras = ["cu13"] },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
-    { name = "spdl", specifier = ">=0.3.1" },
     { name = "timm", specifier = ">=1.0.26" },
     { name = "torch", specifier = ">=2.11.0" },
     { name = "torchao", specifier = ">=0.17.0" },

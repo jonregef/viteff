@@ -8,7 +8,7 @@ from torch import nn
 import torch
 import trackio
 
-from src.curriculum import BatchSizeCurriculum
+from src.dataloader import BatchSizeCurriculum
 
 
 @dataclass

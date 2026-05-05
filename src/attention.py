@@ -1,4 +1,5 @@
 import logging
+from math import sqrt, pi
 
 from einops import rearrange
 from torch import nn, Tensor
@@ -87,6 +88,18 @@ class VarlenAttention(nn.Module):
             window_size=(-1, -1),
         )
         return self.proj_drop(self.proj(rearrange(out, "t h d -> t (h d)")))
+
+
+class Laplace(nn.Module):
+    """Mega: Moving Average Equipped Gated Attention (2209.10655)"""
+
+    def __init__(self, mu: float = sqrt(0.5), sigma: float = sqrt(pi / 4)) -> None:
+        super().__init__()
+        self.register_buffer("mu", torch.tensor(mu))
+        self.register_buffer("denom", torch.tensor(sigma * sqrt(2)))
+
+    def forward(self, x: Tensor) -> Tensor:
+        return 0.5 * (1 + torch.erf((x - self.mu) / self.denom))  # type: ignore
 
 
 class SquaredReLU(nn.Module):

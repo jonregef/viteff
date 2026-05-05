@@ -16,8 +16,7 @@ for _ in ["cutlass", "torchao", "httpcore", "spdl", "filelock", "asyncio", "PIL"
     logging.getLogger(_).setLevel(logging.WARNING)
 
 from src.config import RunConfig
-from src.curriculum import BatchSizeCurriculum
-from src.dataloader import build_webdataset_dataloader, train_augs
+from src.dataloader import build_webdataset_dataloader, train_augs, BatchSizeCurriculum
 from src.hooks import CheckpointHook, Hook, LoggingHook, TrainerState, ValidationHook
 from src.models import build_model
 from src.optimization import build_optimizer, build_scheduler
@@ -111,11 +110,12 @@ def train(config: RunConfig) -> None:
     dataloader = build_webdataset_dataloader(
         train_urls,
         train=True,
-        batch_size=config.data.batch_size,  # type: ignore # FIXME
         threads=config.data.threads,
         augs=train_augs,
         seed=config.seed,
+        batch_size=state.curriculum.at(0),
     )
+
     hooks: list[Hook] = [
         LoggingHook(frequency=config.logging.frequency),
         CheckpointHook(
@@ -131,8 +131,8 @@ def train(config: RunConfig) -> None:
                 batch_size=config.validation.batch_size,
                 threads=config.data.threads,
                 seed=config.seed,
-            )
-        ),    
+            ),
+        ),
     ]
     for h in hooks:
         h.on_train_start(state)
@@ -159,7 +159,7 @@ def train(config: RunConfig) -> None:
             state.samples_seen_delta += len(images)
             if config.unit == "step":
                 state.last_loss = last_loss.item()
-                for h in hooks: 
+                for h in hooks:
                     h.on_tick(state)
             state.step += 1
             if done():
@@ -172,6 +172,7 @@ def train(config: RunConfig) -> None:
 
     for h in hooks:
         h.on_train_end(state)
+    trackio.finish()
 
 
 class _TrainingApp(RunConfig):
