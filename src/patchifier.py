@@ -10,12 +10,6 @@ import torch
 from .encoding import RoPE, APE
 
 
-def resize(image: Tensor, size: tuple[int, int]) -> Tensor:
-    return torch.nn.functional.interpolate(
-        image[None, ...], size, mode="bilinear", antialias=True, align_corners=False
-    )[0]
-
-
 class PatchifierOutput(NamedTuple):
     tokens: Tensor  # (sum_N, embed_dim)
     cu_seqlens: Tensor  # (B+1,) int32
@@ -124,7 +118,13 @@ class VarlenPatchifier(nn.Module):
                     Hp, Wp = self._shrink_grid(height, width, patch_budget)
                     th, tw = Hp * self.patch_size, Wp * self.patch_size
                     if (height, width) != (th, tw):
-                        img = resize(img, (th, tw))
+                        img = torch.nn.functional.interpolate(
+                            img.unsqueeze(0),
+                            (th, tw),
+                            mode="bilinear",
+                            antialias=True,
+                            align_corners=False,
+                        ).squeeze(0)
                     patches, coords = self._patchify(img, Hp, Wp)
 
                 case "drop":

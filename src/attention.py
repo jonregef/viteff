@@ -18,12 +18,6 @@ if available:
         pass
 
 
-def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
-    """x: (..., N, D). cos/sin: (N, D) or any shape broadcastable to x."""
-    x1, x2 = x.chunk(2, dim=-1)
-    return x * cos + torch.cat([-x2, x1], dim=-1) * sin
-
-
 class VarlenAttention(nn.Module):
     """Varlen multi-head self-attention for packed token sequences.
 
@@ -55,6 +49,12 @@ class VarlenAttention(nn.Module):
         self.proj = nn.Linear(dim, dim, bias=False)
         self.proj_drop = nn.Dropout(proj_drop) if proj_drop > 0 else nn.Identity()
 
+    @staticmethod
+    def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+        """x: (..., N, D). cos/sin: (N, D) or any shape broadcastable to x."""
+        x1, x2 = x.chunk(2, dim=-1)
+        return x * cos + torch.cat([-x2, x1], dim=-1) * sin
+
     def forward(
         self,
         x: Tensor,  # (total_tokens, dim)
@@ -74,7 +74,7 @@ class VarlenAttention(nn.Module):
         if rope_cos is not None and rope_sin is not None:
             # Broadcast RoPE over head dim: (total_tokens, 1, head_dim)
             cos, sin = rope_cos.unsqueeze(1), rope_sin.unsqueeze(1)
-            q, k = apply_rope(q, cos, sin), apply_rope(k, cos, sin)
+            q, k = self.apply_rope(q, cos, sin), self.apply_rope(k, cos, sin)
 
         q, k = q.to(v.dtype), k.to(v.dtype)
         out = varlen_attn(
