@@ -1,8 +1,8 @@
 from contextlib import redirect_stdout
+from functools import partial
 from glob import glob
 import io
 import logging
-import time
 
 from pydantic_settings import CliApp
 from rich.logging import RichHandler
@@ -18,6 +18,7 @@ for _ in ["cutlass", "torchao", "httpcore", "spdl", "filelock", "asyncio", "PIL"
 from src.config import RunConfig
 from src.curriculum import BatchSizeCurriculum
 from src.dataloader import build_webdataset_dataloader, train_augs
+from src.hooks import CheckpointHook, Hook, LoggingHook, TrainerState, ValidationHook
 from src.models import build_model
 from src.optimization import build_optimizer, build_scheduler
 from src.utils import seed_everything
@@ -25,7 +26,7 @@ from src.utils import seed_everything
 
 @torch.inference_mode()
 def validate(
-    model: nn.Module, urls: list[str], batch_size: int, threads: int, seed: int
+    model: nn.Module, *, urls: list[str], batch_size: int, threads: int, seed: int
 ) -> dict[str, float]:
     dataloader = build_webdataset_dataloader(
         urls, batch_size=batch_size, threads=threads, augs=None, train=False, seed=seed
@@ -94,13 +95,19 @@ def train(config: RunConfig) -> None:
     config.logging.directory.mkdir(parents=True, exist_ok=True)
     config.checkpoint.directory.mkdir(parents=True, exist_ok=True)
 
-    step, epoch = 0, 0
-    now = (lambda: step) if config.unit == "step" else (lambda: epoch)
-    done = lambda: now() >= config.scheduler.total  # noqa: E731
-
-    curriculum = BatchSizeCurriculum(
-        config.data.batch_size, config.data.milestones, now
+    state = TrainerState(
+        unit=config.unit,
+        model=model,
+        model_ema=model_ema,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        curriculum=None,  # type: ignore[arg-type]
     )
+    state.curriculum = BatchSizeCurriculum(
+        config.data.batch_size, config.data.milestones, lambda: state.now
+    )
+    done = lambda: state.now >= config.scheduler.total  # noqa: E731
+
     dataloader = build_webdataset_dataloader(
         train_urls,
         train=True,
@@ -109,54 +116,30 @@ def train(config: RunConfig) -> None:
         augs=train_augs,
         seed=config.seed,
     )
-    samples_seen, start_time = 0, time.perf_counter()
-
-    def hooks(loss: float) -> None:
-        nonlocal samples_seen, start_time
-        current = now()
-        if current % config.logging.frequency == 0:
-            throughput = samples_seen / (time.perf_counter() - start_time)
-            metrics = {
-                "step": step,
-                "epoch": epoch,
-                "batch_size": curriculum.at(current),
-                "throughput": throughput,
-                "loss": loss,
-            }
-            logging.info(", ".join(f"{k}: {v:.4g}" for k, v in metrics.items()))
-            metrics.pop("step", None)
-            trackio.log(metrics)
-            samples_seen, start_time = 0, time.perf_counter()
-        if current % config.checkpoint.frequency == 0:
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(),
-                    "step": step,
-                    "epoch": epoch,
-                    "model_ema": model_ema.module.state_dict() if model_ema else None,
-                    "config": config.model_dump(),
-                },
-                config.checkpoint.directory / f"{step:08d}.pt",
-            )
-            logging.info("saved")
-        if current % config.validation.frequency == 0:
-            eval_target = model_ema.module if model_ema is not None else model
-            logging.info("validating...")
-            metrics = validate(
-                eval_target,
-                valid_urls,
+    hooks: list[Hook] = [
+        LoggingHook(frequency=config.logging.frequency),
+        CheckpointHook(
+            frequency=config.checkpoint.frequency,
+            directory=config.checkpoint.directory,
+            config_dump=config.model_dump(),
+        ),
+        ValidationHook(
+            frequency=config.validation.frequency,
+            validate_fn=partial(
+                validate,
+                urls=valid_urls,
                 batch_size=config.validation.batch_size,
                 threads=config.data.threads,
                 seed=config.seed,
             )
-            logging.info(", ".join(f"{k}: {v:.4f}" for k, v in metrics.items()))
-            trackio.log(metrics)
+        ),    
+    ]
+    for h in hooks:
+        h.on_train_start(state)
 
     while not done():
         if config.unit == "epoch":
-            scheduler.step(epoch)
+            scheduler.step(state.epoch)
         last_loss = torch.zeros((), device="cuda")
         optimizer.zero_grad(set_to_none=True)  # Needed?
         for images, labels in dataloader:
@@ -164,7 +147,7 @@ def train(config: RunConfig) -> None:
                 batch_metrics = compiled(images, labels)  # type: ignore
             loss: Tensor = batch_metrics.pop("loss")
             if config.unit == "step":
-                scheduler.step_update(num_updates=step)
+                scheduler.step_update(num_updates=state.step)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             last_loss = loss.detach()
@@ -173,15 +156,22 @@ def train(config: RunConfig) -> None:
             optimizer.step()
             if model_ema is not None:
                 model_ema.update_parameters(model)
-            samples_seen += len(images)
+            state.samples_seen_delta += len(images)
             if config.unit == "step":
-                hooks(last_loss.item())
-            step += 1
+                state.last_loss = last_loss.item()
+                for h in hooks: 
+                    h.on_tick(state)
+            state.step += 1
             if done():
                 break
         if config.unit == "epoch":
-            hooks(last_loss.item())
-        epoch += 1
+            state.last_loss = last_loss.item()
+            for h in hooks:
+                h.on_tick(state)
+        state.epoch += 1
+
+    for h in hooks:
+        h.on_train_end(state)
 
 
 class _TrainingApp(RunConfig):
