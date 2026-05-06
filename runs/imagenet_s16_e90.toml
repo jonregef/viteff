@@ -1,0 +1,55 @@
+# 2205.01580 Beyer et al.
+
+precision = "bf16"
+unit = "epoch"
+clip_gradients = 1.0
+seed = 42
+
+[data]
+train_shards = "./imagenet/imagenet1k-train-*.tar"
+valid_shards = "./imagenet/imagenet1k-validation-*.tar"
+batch_size = 512
+max_seq_len = 200_000
+threads = 16
+
+[model]
+size = "s"              # dim=384, layers=12, heads=6, registers=4
+patch_method = "resize"
+with_ape = true
+drop_path = 0.05
+mlp_ratio = 4
+
+[model.head]
+task = "classification"
+method = "avgpool"
+loss = "bce"
+classes = 1000
+
+[optimizer]
+algorithm = "adamuon"
+learning_rate = 5e-4  # 1e-3
+weight_decay = 0.0001
+momentum = 0.95
+nesterov = true
+
+[scheduler]
+total = 90
+warmup = 5
+
+[ema]
+enabled = true
+decay = 0.9999
+
+[validation]
+frequency = 10
+batch_size = 512
+
+[checkpoint]
+frequency = 10
+directory = "./runs/checkpoints"
+
+[logging]
+frequency = 1
+directory = "./runs/logs"
+project = "imagenet-vit"
+group = "s16-90ep"

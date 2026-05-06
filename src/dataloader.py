@@ -88,7 +88,11 @@ class CudaPrefetcher:
 train_augs = torch.jit.script(
     torch.nn.Sequential(
         T.RandomHorizontalFlip(p=0.5),
-        T.TrivialAugmentWide(interpolation=InterpolationMode.BILINEAR),
+        # T.TrivialAugmentWide(interpolation=InterpolationMode.BILINEAR),
+        # T.RandomErasing(p=0.25),
+        T.RandAugment(
+            num_ops=2, magnitude=10, interpolation=InterpolationMode.BILINEAR
+        ),
     )
 )
 

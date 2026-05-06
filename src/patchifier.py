@@ -12,23 +12,26 @@ from .encoding import RoPE, APE
 
 class PatchifierOutput(NamedTuple):
     tokens: Tensor  # (sum_N, embed_dim)
-    cu_seqlens: Tensor  # (B+1,) int32
+    cu_seqlens: Tensor  # (B+1,) int32, or (B+2,) when batch padding is appended
     max_seqlen: int
     patch_hw: list[tuple[int, int]]
     patch_coords: Tensor  # (sum_N, 2) long
     rope_cos: Tensor  # (sum_N, head_dim)
     rope_sin: Tensor
-    is_patch: Tensor  # (sum_N,) bool
+    is_patch: Tensor  # (sum_N,) bool, False for registers and trailing batch padding
+    batch_size: int  # number of real images; cu_seqlens may have an extra pad segment
 
 
 class _Pieces(NamedTuple):
-    raw_patches: list[Tensor]
-    coords: list[Tensor]
-    seqlens: list[int]  # patches per image, no registers
+    raw_patches: list[Tensor]  # unpadded per-image patch tensors
+    coords: list[Tensor]  # unpadded per-image coord tensors
+    seqlens: list[int]  # real patches per image (no registers, no padding)
     patch_hw: list[tuple[int, int]]
-    cu: Tensor  # (B+1,) int32, with registers
+    cu: Tensor  # int32, B+1 or B+2 entries (extra entry when pad_rows > 0)
     max_seqlen: int
     denom: Tensor | None  # (B, 2) float32 for APE
+    batch_size: int
+    pad_rows: int  # 0..15, batch-level trailing padding for tensor-core alignment
 
 
 class VarlenPatchifier(nn.Module):
@@ -69,17 +72,15 @@ class VarlenPatchifier(nn.Module):
         if num_registers > 0:
             self.registers = nn.Parameter(torch.empty(num_registers, embed_dim))
             nn.init.trunc_normal_(self.registers, std=0.02)
-            # https://arxiv.org/abs/2602.08071
-            self.register_rope = RoPE(2, self.head_dim, base=100_000.0)
             prefix_pos = torch.arange(num_registers)
             prefix_pos = torch.stack([prefix_pos, prefix_pos], dim=-1)
             self.register_buffer("register_positions", prefix_pos)
-            self.register_buffer(
-                "register_rope_cos", torch.ones(num_registers, self.head_dim)
-            )
-            self.register_buffer(
-                "register_rope_sin", torch.ones(num_registers, self.head_dim)
-            )
+            # https://arxiv.org/abs/2602.08071
+            register_rope = RoPE(2, self.head_dim, base=100_000.0)
+            with torch.no_grad():
+                cos, sin = register_rope(prefix_pos)
+            self.register_buffer("register_rope_cos", cos.contiguous())
+            self.register_buffer("register_rope_sin", sin.contiguous())
 
     def _shrink_grid(self, height: int, width: int, budget: int) -> tuple[int, int]:
         Hp_nat = max(1, height // self.patch_size)
@@ -138,26 +139,27 @@ class VarlenPatchifier(nn.Module):
                         idx = torch.randperm(num_patches, device=device)[:patch_budget]
                         patches, coords = patches[idx], coords[idx]
 
-            # pad sequence to be divisible by self.pad_to
-            n = patches.shape[0] + self.num_registers
-            mask = self.pad_to - 1
-            m = (n + mask) & ~mask
-            pad_rows = m - n
-            if pad_rows > 0:
-                padding = patches.new_zeros((pad_rows, patches.shape[1]))
-                patches = torch.cat([patches, padding], dim=0)
-                coord_pad = coords.new_zeros((pad_rows, coords.shape[1]))
-                coords = torch.cat([coords, coord_pad], dim=0)
-
             raw.append(patches)
             coords_list.append(coords)
             hw.append((Hp, Wp))
-            seqlens.append(patches.shape[0] if patches is not None else 0)
+            seqlens.append(patches.shape[0])
 
+        # Pad the entire packed batch (registers + patches) to a multiple of
+        # self.pad_to once, instead of padding each image individually.
+        # This introduces at most pad_to-1 padding tokens per batch.
         seqlens_with_reg = [self.num_registers + n for n in seqlens]
-        cu = torch.tensor(
-            [0, *accumulate(seqlens_with_reg)], dtype=torch.int32, device=device
-        )
+        total = sum(seqlens_with_reg)
+        mask = self.pad_to - 1
+        pad_rows = ((total + mask) & ~mask) - total
+
+        cu_entries = [0, *accumulate(seqlens_with_reg)]
+        if pad_rows > 0:
+            # Append a trailing pad-only segment. FlashAttention varlen
+            # processes segments independently, so this segment is isolated
+            # from the real images and cannot contaminate their attention.
+            cu_entries.append(cu_entries[-1] + pad_rows)
+        cu = torch.tensor(cu_entries, dtype=torch.int32, device=device)
+
         denom: Tensor | None = None
         if self.ape is not None:
             denom = torch.tensor(
@@ -165,29 +167,32 @@ class VarlenPatchifier(nn.Module):
                 dtype=torch.float,
                 device=device,
             )
+        max_seqlen = max(max(seqlens_with_reg, default=0), pad_rows)
         return _Pieces(
             raw_patches=raw,
             coords=coords_list,
             seqlens=seqlens,
             patch_hw=hw,
             cu=cu,
-            max_seqlen=max(seqlens_with_reg),
+            max_seqlen=max_seqlen,
             denom=denom,
+            batch_size=batch_size,
+            pad_rows=pad_rows,
         )
 
     @torch.compiler.disable
     def forward(self, images: list[Tensor]) -> PatchifierOutput:  # type: ignore
         pieces: _Pieces = self._get_pieces(images)  # type: ignore
         device = images[0].device
-        projected = self.proj(torch.cat(pieces.raw_patches, dim=0))  # (sum_patches, D)
-        all_patch_coords = torch.cat(pieces.coords, dim=0)
+        projected = self.proj(torch.cat(pieces.raw_patches, 0))  # (sum_real_patches, D)
+        all_patch_coords = torch.cat(pieces.coords, 0)
         patch_cos, patch_sin = self.rope(all_patch_coords)
         if pieces.denom is not None and self.ape is not None:
-            seqlens_t = (pieces.cu.diff() - self.num_registers).to(torch.int64)
+            seqlens_t = torch.tensor(pieces.seqlens, device=device, dtype=torch.int64)
             denom_per_token = pieces.denom.repeat_interleave(seqlens_t, dim=0)
             projected = projected + self.ape(all_patch_coords / denom_per_token)
 
-        # Assemble final sequence: [registers, patches] per image.
+        # Assemble interleaved [reg_i, patches_i, ...] across real images, unpadded.
         if self.num_registers > 0:
             proj_pi = projected.split(pieces.seqlens)
             pcos_pi = patch_cos.split(pieces.seqlens)
@@ -205,14 +210,40 @@ class VarlenPatchifier(nn.Module):
             tokens, patch_coords = projected, all_patch_coords
             rope_cos, rope_sin = patch_cos, patch_sin
 
+        # Append a single trailing pad block for the whole batch. RoPE for these
+        # rows is set to identity rotation (cos=1, sin=0) — they only attend to
+        # themselves via cu_seqlens segmentation, so the values do not matter.
+        if pieces.pad_rows > 0:
+            n = pieces.pad_rows
+            tokens = torch.cat([tokens, tokens.new_zeros(n, tokens.shape[1])], dim=0)
+            patch_coords = torch.cat(
+                [patch_coords, patch_coords.new_zeros(n, patch_coords.shape[1])], dim=0
+            )
+            rope_cos = torch.cat(
+                [rope_cos, rope_cos.new_ones(n, rope_cos.shape[1])], dim=0
+            )
+            rope_sin = torch.cat(
+                [rope_sin, rope_sin.new_zeros(n, rope_sin.shape[1])], dim=0
+            )
+
         is_patch = torch.ones(tokens.shape[0], dtype=torch.bool, device=device)
+
         if self.num_registers > 0:
             offsets = torch.arange(self.num_registers, device=device)
-            prefix_idx = (pieces.cu[:-1].long()[:, None] + offsets[None, :]).flatten()
-            is_patch = is_patch.index_fill(0, prefix_idx, False)  # registers
+            # Per-image register positions; cu[batch_size:] may include the
+            # trailing pad segment, which we deliberately skip here.
+            prefix_idx = (
+                pieces.cu[: pieces.batch_size].long()[:, None] + offsets[None, :]
+            ).flatten()
+            is_patch = is_patch.index_fill(0, prefix_idx, False)
+
+        if pieces.pad_rows > 0:
+            pad_start = tokens.shape[0] - pieces.pad_rows
+            pad_idx = torch.arange(pieces.pad_rows, device=device) + pad_start
+            is_patch = is_patch.index_fill(0, pad_idx, False)
 
         # pool patch tokens: output.tokens[output.is_patch]
-        # specific register slot r: output.tokens[output.cu_seqlens[:-1] + r]
+        # specific register slot r: output.tokens[output.cu_seqlens[:output.batch_size] + r]
         return PatchifierOutput(
             tokens=tokens,
             cu_seqlens=pieces.cu,
@@ -222,4 +253,5 @@ class VarlenPatchifier(nn.Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             is_patch=is_patch,
+            batch_size=pieces.batch_size,
         )

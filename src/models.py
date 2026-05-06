@@ -47,7 +47,7 @@ class VarlenVisionTransformer(nn.Module):
         patch_size: int = 16,
         patch_method: Literal["resize", "drop", "random"] = "resize",
         with_ape: bool = False,
-        proj_drop: float = 0,
+        drop_path: float = 0.0,
         mlp_ratio: int = 4,
     ) -> None:
         super().__init__()
@@ -64,7 +64,11 @@ class VarlenVisionTransformer(nn.Module):
             num_registers=registers,
             with_ape=with_ape,
         )
-        # FIXME: linearly decreasing stochastic depth
+        dp_rates = (
+            [drop_path * i / max(layers - 1, 1) for i in range(layers)]
+            if drop_path > 0
+            else [0.0] * layers
+        )
         self.blocks = nn.ModuleList(
             VarlenBlock(
                 dim,
@@ -72,9 +76,9 @@ class VarlenVisionTransformer(nn.Module):
                 mlp_ratio=mlp_ratio,
                 layerscale=1e-4,
                 sparse=sparse,
-                proj_drop=proj_drop,
+                drop_path=rate,
             )
-            for _ in range(layers)
+            for rate in dp_rates
         )
         self.out_norm = nn.RMSNorm(dim)
 
@@ -150,7 +154,8 @@ def build_model(max_seq_len: int, use_fp8: bool, config: ModelConfig) -> nn.Modu
         max_seq_len=max_seq_len,
         sparse=config.sparse,
         patch_method=config.patch_method,
-        proj_drop=config.proj_drop,
+        with_ape=config.with_ape,
+        drop_path=config.drop_path,
         mlp_ratio=config.mlp_ratio,
     )
     match config.head:

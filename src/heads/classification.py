@@ -10,8 +10,10 @@ class RegisterClassifier(nn.Module):
         self.fc = nn.Linear(dim, num_classes, bias=True)
 
     def forward(self, tokens: Tensor, metadata: PatchifierOutput) -> Tensor:
-        # (B, dim), first token ([CLS] token) of each segment
-        cls = tokens[metadata.cu_seqlens[:-1]]
+        # (B, dim), first token ([CLS] token) of each real-image segment.
+        # cu_seqlens may contain a trailing pad-only segment, so slice to
+        # batch_size rather than [:-1].
+        cls = tokens[metadata.cu_seqlens[: metadata.batch_size]]
         return self.fc(cls)
 
 
@@ -22,9 +24,12 @@ class AveragePoolingClassifier(nn.Module):
 
     def forward(self, tokens: Tensor, metadata: PatchifierOutput) -> Tensor:
         device, dtype = tokens.device, tokens.dtype
-        batch_size = metadata.cu_seqlens.shape[0] - 1
+        batch_size = metadata.batch_size
+        # seg_ids labels every token (incl. registers and padding) with its segment idx.
+        # is_patch filters to real patches, whose segment ids fall in [0, batch_size).
+        num_segments = metadata.cu_seqlens.shape[0] - 1
         seg_ids = torch.repeat_interleave(
-            torch.arange(batch_size, device=device),
+            torch.arange(num_segments, device=device),
             (metadata.cu_seqlens[1:] - metadata.cu_seqlens[:-1]),
         )
         patch_tokens, patch_seg = tokens[metadata.is_patch], seg_ids[metadata.is_patch]
@@ -47,9 +52,10 @@ class AttentionPoolingClassifier(nn.Module):
 
     def forward(self, tokens: Tensor, metadata: PatchifierOutput) -> Tensor:
         device, dtype = tokens.device, tokens.dtype
-        batch_size = metadata.cu_seqlens.shape[0] - 1
+        batch_size = metadata.batch_size
+        num_segments = metadata.cu_seqlens.shape[0] - 1
         seg_ids = torch.repeat_interleave(
-            torch.arange(batch_size, device=tokens.device),
+            torch.arange(num_segments, device=tokens.device),
             (metadata.cu_seqlens[1:] - metadata.cu_seqlens[:-1]),
         )
         patch_tokens = tokens[metadata.is_patch]

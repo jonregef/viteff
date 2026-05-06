@@ -34,7 +34,6 @@ class VarlenAttention(nn.Module):
         num_heads: int,
         *,
         qk_norm: bool = True,
-        proj_drop: float = 0.0,
         softmax_scale: float | None = None,
     ) -> None:
         super().__init__()
@@ -48,7 +47,6 @@ class VarlenAttention(nn.Module):
         self.q_norm = nn.RMSNorm(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = nn.RMSNorm(self.head_dim) if qk_norm else nn.Identity()
         self.proj = nn.Linear(dim, dim, bias=False)
-        self.proj_drop = nn.Dropout(proj_drop) if proj_drop > 0 else nn.Identity()
 
     @staticmethod
     def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
@@ -87,7 +85,7 @@ class VarlenAttention(nn.Module):
             scale=self.softmax_scale,
             window_size=(-1, -1),
         )
-        return self.proj_drop(self.proj(rearrange(out, "t h d -> t (h d)")))
+        return self.proj(rearrange(out, "t h d -> t (h d)"))
 
 
 class Laplace(nn.Module):
@@ -121,6 +119,22 @@ class LayerScale(nn.Module):
         return x * self.layer_scale
 
 
+class DropPath(nn.Module):
+    def __init__(self, p: float = 0.0) -> None:
+        super().__init__()
+        self.p = p
+
+    def forward(self, x: Tensor, cu_seqlens: Tensor) -> Tensor:
+        if self.p == 0.0 or not self.training:
+            return x
+        num_samples = cu_seqlens.numel() - 1
+        keep = (torch.rand(num_samples, device=x.device) > self.p).to(x.dtype)
+        keep = keep / (1.0 - self.p)
+        seqlens = (cu_seqlens[1:] - cu_seqlens[:-1]).to(torch.int64)
+        keep_per_token = keep.repeat_interleave(seqlens).unsqueeze(-1)
+        return x * keep_per_token
+
+
 class VarlenBlock(nn.Module):
     def __init__(
         self,
@@ -129,11 +143,11 @@ class VarlenBlock(nn.Module):
         mlp_ratio: int = 4,
         layerscale: float | None = 1e-4,
         sparse: bool = False,
-        proj_drop: float = 0,
+        drop_path: float = 0.0,
     ) -> None:
         super().__init__()
         self.norm1 = nn.RMSNorm(dim)
-        self.attn = VarlenAttention(dim, num_heads, proj_drop=proj_drop)
+        self.attn = VarlenAttention(dim, num_heads)
         self.norm2 = nn.RMSNorm(dim)
         hidden = dim * mlp_ratio
 
@@ -142,6 +156,8 @@ class VarlenBlock(nn.Module):
             self.ls2 = LayerScale(dim, layerscale)
         else:
             self.ls1, self.ls2 = nn.Identity(), nn.Identity()
+
+        self.drop_path = DropPath(drop_path)
 
         if sparse and hidden % 128 == 0:
             # FIXME: couldn't get to work.
@@ -168,8 +184,7 @@ class VarlenBlock(nn.Module):
         rope_cos: Tensor | None = None,  # (total_tokens, head_dim)
         rope_sin: Tensor | None = None,  # (total_tokens, head_dim)
     ) -> Tensor:
-        x = x + self.ls1(
-            self.attn(self.norm1(x), cu_seqlens, max_seqlen, rope_cos, rope_sin)
-        )
-        x = x + self.ls2(self.mlp(self.norm2(x)))
+        a = self.attn(self.norm1(x), cu_seqlens, max_seqlen, rope_cos, rope_sin)
+        x = x + self.drop_path(self.ls1(a), cu_seqlens)
+        x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))), cu_seqlens)
         return x
