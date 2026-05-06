@@ -61,6 +61,7 @@ class VarlenPatchifier(nn.Module):
         self.method = method
         self.num_registers = num_registers
         self.with_ape = with_ape
+        self.pad_to = 16  # for cuda tensor core alignment
 
         self.proj = nn.Linear(in_channels * patch_size * patch_size, embed_dim)
         self.rope = RoPE(2, self.head_dim, base=10_000.0)
@@ -110,7 +111,7 @@ class VarlenPatchifier(nn.Module):
             1, (self.max_seq_len - batch_size * self.num_registers) // batch_size
         )
         raw, coords_list, hw, seqlens = [], [], [], []
-        patches, coords, Hp, Wp = None, None, None, None
+        patches, coords, Hp, Wp = torch.zeros(()), torch.zeros(()), 0, 0
         for img in images:
             _, height, width = img.shape
             match self.method if self.method != "random" else choice(self.methods):
@@ -136,6 +137,17 @@ class VarlenPatchifier(nn.Module):
                     if self.training and num_patches > patch_budget:
                         idx = torch.randperm(num_patches, device=device)[:patch_budget]
                         patches, coords = patches[idx], coords[idx]
+
+            # pad sequence to be divisible by self.pad_to
+            n = patches.shape[0] + self.num_registers
+            mask = self.pad_to - 1
+            m = (n + mask) & ~mask
+            pad_rows = m - n
+            if pad_rows > 0:
+                padding = patches.new_zeros((pad_rows, patches.shape[1]))
+                patches = torch.cat([patches, padding], dim=0)
+                coord_pad = coords.new_zeros((pad_rows, coords.shape[1]))
+                coords = torch.cat([coords, coord_pad], dim=0)
 
             raw.append(patches)
             coords_list.append(coords)

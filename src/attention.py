@@ -126,7 +126,7 @@ class VarlenBlock(nn.Module):
         self,
         dim: int,
         num_heads: int,
-        mlp_ratio: float = 4.0,
+        mlp_ratio: int = 4,
         layerscale: float | None = 1e-4,
         sparse: bool = False,
         proj_drop: float = 0,
@@ -135,7 +135,7 @@ class VarlenBlock(nn.Module):
         self.norm1 = nn.RMSNorm(dim)
         self.attn = VarlenAttention(dim, num_heads, proj_drop=proj_drop)
         self.norm2 = nn.RMSNorm(dim)
-        hidden = int(dim * mlp_ratio)
+        hidden = dim * mlp_ratio
 
         if layerscale:
             self.ls1 = LayerScale(dim, layerscale)
@@ -143,7 +143,11 @@ class VarlenBlock(nn.Module):
         else:
             self.ls1, self.ls2 = nn.Identity(), nn.Identity()
 
-        if sparse and hidden % 16 == 0:
+        if sparse and hidden % 128 == 0:
+            # FIXME: couldn't get to work.
+            # Sequence-length needs to be padded to a multiple of 128
+            # but even then, backwards pass get shapes wrong and panics
+            # Also currently incompatible with fp8 training
             self.mlp = nn.Sequential(
                 nn.Linear(dim, hidden, bias=False),
                 SquaredReLU(),  # 2402.03804

@@ -86,7 +86,7 @@ class OptimizerConfig(BaseModel):
     learning_rate: float = 0.02
     weight_decay: float = 0.05
     momentum: float = 0.95
-    nesterov: bool = False
+    nesterov: bool = True
     algorithm: Literal["adam", "muon", "adamuon"] = "muon"
 
 
@@ -105,6 +105,7 @@ class ModelConfig(BaseModel):
     patch_method: Literal["resize", "drop", "random"] = "resize"
     with_ape: bool = False
     proj_drop: float = 0.0
+    mlp_ratio: int = 4
     head: ClassificationConfig | SegmentationConfig = Field(
         default_factory=ClassificationConfig, discriminator="task"
     )

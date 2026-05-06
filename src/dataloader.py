@@ -6,7 +6,7 @@ from torch import nn, Tensor
 from torch.profiler import record_function
 from torchvision.io import decode_image, ImageReadMode
 from torchvision.transforms import v2 as T
-from torchvision.transforms.v2 import functional as TF
+from torchvision.transforms.v2 import InterpolationMode, functional as TF
 import torch
 
 warnings.filterwarnings(
@@ -88,8 +88,7 @@ class CudaPrefetcher:
 train_augs = torch.jit.script(
     torch.nn.Sequential(
         T.RandomHorizontalFlip(p=0.5),
-        T.RandomGrayscale(p=0.1),
-        T.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.05),
+        T.TrivialAugmentWide(interpolation=InterpolationMode.BILINEAR),
     )
 )
 

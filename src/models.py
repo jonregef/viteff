@@ -48,6 +48,7 @@ class VarlenVisionTransformer(nn.Module):
         patch_method: Literal["resize", "drop", "random"] = "resize",
         with_ape: bool = False,
         proj_drop: float = 0,
+        mlp_ratio: int = 4,
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -63,8 +64,16 @@ class VarlenVisionTransformer(nn.Module):
             num_registers=registers,
             with_ape=with_ape,
         )
+        # FIXME: linearly decreasing stochastic depth
         self.blocks = nn.ModuleList(
-            VarlenBlock(dim, num_heads=atten_heads, sparse=sparse, proj_drop=proj_drop)
+            VarlenBlock(
+                dim,
+                num_heads=atten_heads,
+                mlp_ratio=mlp_ratio,
+                layerscale=1e-4,
+                sparse=sparse,
+                proj_drop=proj_drop,
+            )
             for _ in range(layers)
         )
         self.out_norm = nn.RMSNorm(dim)
@@ -125,6 +134,12 @@ class ClassificationViT(nn.Module):
         }
 
 
+def _fp8_filter(m: nn.Module, _: str) -> bool:
+    return type(m) is nn.Linear and (
+        m.in_features % 16 == 0 and m.out_features % 16 == 0
+    )
+
+
 def build_model(max_seq_len: int, use_fp8: bool, config: ModelConfig) -> nn.Module:
     assert config.dim and config.layers and config.atten_heads and config.registers
     backbone = VarlenVisionTransformer(
@@ -136,6 +151,7 @@ def build_model(max_seq_len: int, use_fp8: bool, config: ModelConfig) -> nn.Modu
         sparse=config.sparse,
         patch_method=config.patch_method,
         proj_drop=config.proj_drop,
+        mlp_ratio=config.mlp_ratio,
     )
     match config.head:
         case ClassificationConfig():
@@ -150,6 +166,5 @@ def build_model(max_seq_len: int, use_fp8: bool, config: ModelConfig) -> nn.Modu
             raise NotImplementedError()
 
     if use_fp8:
-        is_linear = lambda m, _: type(m) is nn.Linear  # noqa: E731
-        model = convert_to_float8_training(model, module_filter_fn=is_linear)
+        model = convert_to_float8_training(model, module_filter_fn=_fp8_filter)
     return model

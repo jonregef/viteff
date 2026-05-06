@@ -78,7 +78,8 @@ def train(config: RunConfig) -> None:
             multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(config.ema.decay),
             use_buffers=True,
         )
-    compiled = torch.compile(model.forward_with_target, dynamic=True)  # type: ignore
+
+    compiled = torch.compile(model.forward_with_target)  # type: ignore
 
     train_urls = sorted(glob(config.data.train_shards))
     if not train_urls:
@@ -100,7 +101,7 @@ def train(config: RunConfig) -> None:
         model_ema=model_ema,
         optimizer=optimizer,
         scheduler=scheduler,
-        curriculum=None,  # type: ignore[arg-type]
+        curriculum=None,  # type: ignore
     )
     state.curriculum = BatchSizeCurriculum(
         config.data.batch_size, config.data.milestones, lambda: state.now
