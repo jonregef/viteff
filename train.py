@@ -15,8 +15,9 @@ logging.basicConfig(level=logging.DEBUG, format="%(message)s", handlers=[RichHan
 for _ in ["cutlass", "torchao", "httpcore", "spdl", "filelock", "asyncio", "PIL"]:
     logging.getLogger(_).setLevel(logging.WARNING)
 
+from src.augmentation import imagenet_train_augs
 from src.config import RunConfig
-from src.dataloader import build_webdataset_dataloader, train_augs, BatchSizeCurriculum
+from src.dataloader import build_webdataset_dataloader, BatchSizeCurriculum
 from src.hooks import CheckpointHook, Hook, LoggingHook, TrainerState, ValidationHook
 from src.models import build_model
 from src.optimization import build_optimizer, build_scheduler
@@ -61,7 +62,7 @@ def train(config: RunConfig) -> None:
             resume="allow",
             auto_log_gpu=True,
             gpu_log_interval=60,
-            config=config.model_dump(),
+            config=config.model_dump(mode="json"),
         )
     logging.info(Text.from_ansi(f.getvalue().strip()))
     model = build_model(
@@ -112,17 +113,21 @@ def train(config: RunConfig) -> None:
         train_urls,
         train=True,
         threads=config.data.threads,
-        augs=train_augs,
+        augs=imagenet_train_augs,
         seed=config.seed,
         batch_size=state.curriculum.at(0),
     )
 
     hooks: list[Hook] = [
-        LoggingHook(frequency=config.logging.frequency),
+        LoggingHook(
+            frequency=config.logging.frequency,
+            directory=config.logging.directory,
+            config_dump=config.model_dump(mode="json"),
+        ),
         CheckpointHook(
             frequency=config.checkpoint.frequency,
             directory=config.checkpoint.directory,
-            config_dump=config.model_dump(),
+            config_dump=config.model_dump(mode="json"),
         ),
         ValidationHook(
             frequency=config.validation.frequency,

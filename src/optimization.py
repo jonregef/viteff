@@ -3,16 +3,8 @@ from typing import Literal
 from timm.optim.muon import Muon
 from timm.scheduler.cosine_lr import CosineLRScheduler
 from timm.scheduler.scheduler import Scheduler
-from torch import nn, Tensor
+from torch import nn
 from torch.optim import Optimizer
-
-
-def _no_decay(name: str, p: Tensor) -> bool:
-    return name.endswith(".layer_scale") or name.endswith("registers")
-
-
-def _no_muon(name: str, p: Tensor) -> bool:
-    return p.ndim < 2 or name.endswith("registers")
 
 
 def build_optimizer(
@@ -23,25 +15,11 @@ def build_optimizer(
     nesterov: bool,
     algorithm: Literal["adam", "muon", "adamuon"] = "muon",
 ) -> Optimizer:
-    decay_muon, no_decay_muon, decay_adam, no_decay_adam = [], [], [], []
-    for name, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if _no_muon(name, p) or algorithm == "adam":
-            (no_decay_adam if _no_decay(name, p) else decay_adam).append(p)
-        else:
-            (no_decay_muon if _no_decay(name, p) else decay_muon).append(p)
-
-    param_groups = [
-        {"params": decay_muon, "weight_decay": weight_decay, "use_fallback": False},
-        {"params": no_decay_muon, "weight_decay": 0.0, "use_fallback": False},
-        {"params": decay_adam, "weight_decay": weight_decay, "use_fallback": True},
-        {"params": no_decay_adam, "weight_decay": 0.0, "use_fallback": True},
-    ]
     return Muon(
-        param_groups,
+        model.parameters(),
         lr=learning_rate,
-        betas=(0.9, 0.95),
+        weight_decay=weight_decay,
+        betas=(0.9, 0.999),
         momentum=momentum,
         nesterov=nesterov,
         adjust_lr_fn=None if algorithm == "adamuon" else "match_rms_adamw",

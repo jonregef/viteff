@@ -26,9 +26,9 @@ loss = "bce"
 classes = 1000
 
 [optimizer]
-algorithm = "adamuon"
-learning_rate = 5e-4  # 1e-3
-weight_decay = 0.0001
+algorithm = "muon"
+learning_rate = 5e-4
+weight_decay = 1e-4
 momentum = 0.95
 nesterov = true
 

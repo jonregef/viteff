@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
+import json
 import logging
 import time
 
+from timm.scheduler.scheduler import Scheduler
 from torch import nn
 import torch
 import trackio
@@ -17,7 +19,7 @@ class TrainerState:
     model: nn.Module
     model_ema: torch.optim.swa_utils.AveragedModel | None
     optimizer: torch.optim.Optimizer
-    scheduler: Any
+    scheduler: Scheduler
     curriculum: BatchSizeCurriculum
     step: int = 0
     epoch: int = 0
@@ -44,12 +46,18 @@ class Hook:
 
 
 class LoggingHook(Hook):
-    def __init__(self, frequency: int) -> None:
+    def __init__(
+        self, frequency: int, directory: Path, config_dump: dict[str, Any]
+    ) -> None:
         self.frequency = frequency
         self._start_time = 0.0
+        self.directory = directory
+        self.config_dump = config_dump
 
     def on_train_start(self, state: TrainerState) -> None:
         self._start_time = time.perf_counter()
+        with open(self.directory / "config.json", "w") as f:
+            json.dump(self.config_dump, f)
 
     def step(self, state: TrainerState) -> None:
         throughput = state.samples_seen_delta / (time.perf_counter() - self._start_time)
@@ -59,7 +67,12 @@ class LoggingHook(Hook):
             "batch_size": state.curriculum.at(state.now),
             "throughput": throughput,
             "loss": state.last_loss,
+            "lr": state.scheduler._get_lr(
+                state.epoch if state.unit == "epoch" else state.step
+            )[-1],
         }
+        with open(self.directory / f"{state.step:08d}.json", "a") as f:
+            json.dump(metrics, f)
         logging.info(", ".join(f"{k}: {v:.4g}" for k, v in metrics.items()))
         metrics.pop("step", None)
         trackio.log(metrics)

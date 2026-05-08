@@ -46,7 +46,7 @@ class VarlenPatchifier(nn.Module):
         num_heads: int = 12,
         max_seq_len: int = 65_536,
         method: Literal["resize", "drop", "random"] = "resize",
-        num_registers: int = 0,  # e.g. 1 for CLS, 5 for CLS + 4 registers
+        num_registers: int = 0,
         with_ape: bool = False,
     ) -> None:
         super().__init__()

@@ -1,4 +1,5 @@
-from torchvision.transforms import v2 as T
+import torch
+from torchvision.transforms import InterpolationMode, v2 as T
 
 ThreeAugment = T.Compose(
     [
@@ -11,4 +12,14 @@ ThreeAugment = T.Compose(
         ),
         T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3),
     ]
+)
+
+
+imagenet_train_augs = torch.jit.script(
+    torch.nn.Sequential(
+        T.RandomHorizontalFlip(p=0.5),
+        T.RandAugment(
+            num_ops=2, magnitude=10, interpolation=InterpolationMode.BILINEAR
+        ),
+    )
 )

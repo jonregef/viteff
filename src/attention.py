@@ -88,8 +88,22 @@ class VarlenAttention(nn.Module):
         return self.proj(rearrange(out, "t h d -> t (h d)"))
 
 
+class Derf(nn.Module):
+    """https://arxiv.org/abs/2512.10938"""
+
+    def __init__(self, dim: int, alpha: float = 0.5, shift: float = 0.0) -> None:
+        super().__init__()
+        self.alpha = nn.Parameter(torch.full((dim,), alpha))
+        self.shift = nn.Parameter(torch.full((dim,), shift))
+        self.gamma = nn.Parameter(torch.ones(dim))
+        self.beta = nn.Parameter(torch.zeros(dim))
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.gamma * torch.erf(self.alpha * x + self.shift) + self.beta
+
+
 class Laplace(nn.Module):
-    """Mega: Moving Average Equipped Gated Attention (2209.10655)"""
+    """https://arxiv.org/abs/2209.10655"""
 
     def __init__(self, mu: float = sqrt(0.5), sigma: float = sqrt(pi / 4)) -> None:
         super().__init__()
