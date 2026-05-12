@@ -1,5 +1,3 @@
-# 2205.01580 Beyer et al.
-
 precision = "bf16"
 unit = "epoch"
 clip_gradients = 1.0
@@ -11,19 +9,28 @@ valid_shards = "./imagenet/imagenet1k-validation-*.tar"
 batch_size = 512
 max_seq_len = 200_000
 threads = 16
+resolution_cap = 224
+
+[augmentation]
+recipe = "randaug"
+magnitude = 0.5
+with_flip = true
 
 [model]
-size = "s"              # dim=384, layers=12, heads=6, registers=4
+size = "s"
 patch_method = "resize"
 with_ape = true
 drop_path = 0.05
-mlp_ratio = 4
+mlp_ratio = 4.0
+activation = "gelu"
+layerscale = 1e-4
 
 [model.head]
 task = "classification"
 method = "avgpool"
 loss = "bce"
 classes = 1000
+smooth = 0.0
 
 [optimizer]
 algorithm = "muon"
@@ -43,6 +50,7 @@ decay = 0.9999
 [validation]
 frequency = 10
 batch_size = 512
+resolution_cap = 224
 
 [checkpoint]
 frequency = 10

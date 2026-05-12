@@ -1,11 +1,12 @@
 from bisect import bisect_right
+from functools import partial
 from typing import Any, Callable
 import warnings
 
 from torch import nn, Tensor
 from torch.profiler import record_function
 from torchvision.io import decode_image, ImageReadMode
-from torchvision.transforms.v2 import functional as TF
+from torchvision.transforms.v2 import InterpolationMode, functional as TF
 import torch
 
 warnings.filterwarnings(
@@ -37,18 +38,18 @@ class BatchSizeCurriculum:
 
 
 @record_function("decoding")
-def decode_and_cap(
-    sample: tuple[bytes, bytes], max_size: int = 224
-) -> tuple[Tensor, int]:
+def decode_and_cap(sample: tuple[bytes, bytes], cap: int = 224) -> tuple[Tensor, int]:
     jpg, cls = sample
     img = decode_image(
         torch.frombuffer(bytearray(jpg), dtype=torch.uint8), ImageReadMode.RGB
     )
     _, h, w = img.shape
-    s = max_size / max(h, w)
+    s = cap / max(h, w)
     if s >= 1.0:
         return img, int(cls)
-    return TF.resize(img, [round(h * s), round(w * s)], antialias=True), int(cls)
+    new_size = [round(h * s), round(w * s)]
+    img = TF.resize(img, new_size, interpolation=InterpolationMode.BICUBIC)
+    return img, int(cls)
 
 
 class CudaPrefetcher:
@@ -107,6 +108,7 @@ def build_webdataset_dataloader(
     batch_size: int,
     augs: nn.Module | None,
     threads: int,
+    resolution_cap: int = 256,
     seed: int = 42,
 ) -> CudaPrefetcher:
     from webdataset.compat import WebDataset
@@ -120,9 +122,9 @@ def build_webdataset_dataloader(
             detshuffle=True,
             seed=seed,
         )
-        .shuffle(2048 if train else 0, seed=seed)
+        .shuffle(batch_size * 4 if train else 0, seed=seed)
         .to_tuple("jpg", "cls")
-        .map(decode_and_cap, handler=warn_and_continue)
+        .map(partial(decode_and_cap, cap=resolution_cap), handler=warn_and_continue)
     )
     if augs is not None:
         dataset = dataset.map(PicklableAugs(augs), handler=warn_and_continue)

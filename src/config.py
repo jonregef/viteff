@@ -13,6 +13,14 @@ from pydantic_settings import (
 )
 
 
+class AugmentationConfig(BaseModel):
+    recipe: Literal["threeaug", "randaug", "trivialaug"] = "trivialaug"
+    magnitude: float = Field(
+        default=0.5, ge=0, le=1, description="0: identity, 0.5: default, 1: heavy"
+    )
+    with_flip: bool = True
+
+
 class DataConfig(BaseModel):
     train_shards: str = "./data/train-*.tar"
     valid_shards: str = "./data/val-*.tar"
@@ -28,6 +36,7 @@ class DataConfig(BaseModel):
         default=65_536, description="Set to maximize GPU utilization."
     )
     threads: int = 16
+    resolution_cap: int = 256
 
     @model_validator(mode="after")
     def _validate_batch_size(self) -> "DataConfig":
@@ -96,41 +105,56 @@ class EmaConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    size: Literal["s", "b", "l", "xl", None] = "b"
-    dim: int | None = None
-    layers: int | None = None
-    atten_heads: int | None = None
-    registers: int | None = None
+    size: Literal["s", "b", "l", "xl", "so150m", "so400m", None] = "b"
+    dim: int = 512
+    layers: int = 16
+    atten_heads: int = 16
+    registers: int = 4
+    mlp_ratio: float = 4.0
     sparse: bool = False
     patch_method: Literal["resize", "drop", "random"] = "resize"
     with_ape: bool = False
     drop_path: float = 0.0
-    mlp_ratio: int = 4
+    layerscale: float | None = None
+    activation: Literal["gelu", "relu2", "derf"] = "gelu"
     head: ClassificationConfig | SegmentationConfig = Field(
         default_factory=ClassificationConfig, discriminator="task"
     )
 
-    def _set_size(self, dim: int, layers: int, atten_heads: int, registers: int):
-        self.dim = self.dim or dim
-        self.layers = self.layers or layers
-        self.atten_heads = self.atten_heads or atten_heads
-        self.registers = self.registers or registers
+    def _maybe_overwrite(self, name: str, value) -> None:
+        if name not in self.model_fields_set:
+            setattr(self, name, value)
+
+    def _set_size(
+        self, dim: int, layers: int, atten_heads: int, registers: int, mlp_ratio: float
+    ):
+        self._maybe_overwrite("dim", dim)
+        self._maybe_overwrite("layers", layers)
+        self._maybe_overwrite("atten_heads", atten_heads)
+        self._maybe_overwrite("registers", registers)
+        self._maybe_overwrite("mlp_ratio", mlp_ratio)
 
     def model_post_init(self, context) -> None:
         match self.size:
             case "s":
-                self._set_size(384, 12, 6, 4)
+                self._set_size(384, 12, 6, 4, 4.0)
             case "b":
-                self._set_size(768, 12, 12, 4)
+                self._set_size(768, 12, 12, 4, 4.0)
             case "l":
-                self._set_size(1024, 24, 16, 4)
+                self._set_size(1024, 24, 16, 4, 4.0)
             case "xl":
-                self._set_size(1152, 28, 16, 4)
+                self._set_size(1152, 28, 16, 4, 4.0)
+            # https://arxiv.org/abs/2305.13035
+            case "so150m":
+                self._set_size(880, 18, 16, 4, 2320 / 880)
+            case "so400m":
+                self._set_size(1152, 27, 16, 4, 4304 / 1152)
 
 
 class ValidationConfig(BaseModel):
     frequency: int = 1
     batch_size: int = 256
+    resolution_cap: int = 256
 
 
 class RunConfig(BaseSettings, cli_parse_args=True, cli_implicit_flags=True):
@@ -146,6 +170,7 @@ class RunConfig(BaseSettings, cli_parse_args=True, cli_implicit_flags=True):
     unit: Literal["epoch", "step"] = "epoch"
     clip_gradients: float | None = 1.0
 
+    augmentation: AugmentationConfig = AugmentationConfig()
     data: DataConfig = DataConfig()
     model: ModelConfig = ModelConfig()
     optimizer: OptimizerConfig = OptimizerConfig()

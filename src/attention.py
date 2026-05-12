@@ -1,5 +1,5 @@
 import logging
-from math import sqrt, pi
+from typing import Literal
 
 from einops import rearrange
 from torch import nn, Tensor
@@ -102,19 +102,9 @@ class Derf(nn.Module):
         return self.gamma * torch.erf(self.alpha * x + self.shift) + self.beta
 
 
-class Laplace(nn.Module):
-    """https://arxiv.org/abs/2209.10655"""
-
-    def __init__(self, mu: float = sqrt(0.5), sigma: float = sqrt(pi / 4)) -> None:
-        super().__init__()
-        self.register_buffer("mu", torch.tensor(mu))
-        self.register_buffer("denom", torch.tensor(sigma * sqrt(2)))
-
-    def forward(self, x: Tensor) -> Tensor:
-        return 0.5 * (1 + torch.erf((x - self.mu) / self.denom))  # type: ignore
-
-
 class SquaredReLU(nn.Module):
+    """https://arxiv.org/abs/2402.03804"""
+
     def __init__(self, cap: float | None = None) -> None:
         super().__init__()
         self.cap = cap
@@ -127,10 +117,10 @@ class SquaredReLU(nn.Module):
 class LayerScale(nn.Module):
     def __init__(self, dim: int, init: float) -> None:
         super().__init__()
-        self.layer_scale = nn.Parameter(torch.full((dim,), init))
+        self.layerscale = nn.Parameter(torch.full((dim,), init))
 
     def forward(self, x: Tensor) -> Tensor:
-        return x * self.layer_scale
+        return x * self.layerscale
 
 
 class DropPath(nn.Module):
@@ -154,16 +144,17 @@ class VarlenBlock(nn.Module):
         self,
         dim: int,
         num_heads: int,
-        mlp_ratio: int = 4,
+        mlp_ratio: float = 4.0,
         layerscale: float | None = 1e-4,
         sparse: bool = False,
         drop_path: float = 0.0,
+        activation: Literal["gelu", "relu2", "derf"] = "gelu",
     ) -> None:
         super().__init__()
         self.norm1 = nn.RMSNorm(dim)
         self.attn = VarlenAttention(dim, num_heads)
         self.norm2 = nn.RMSNorm(dim)
-        hidden = dim * mlp_ratio
+        hidden = round(dim * mlp_ratio)
 
         if layerscale:
             self.ls1 = LayerScale(dim, layerscale)
@@ -172,6 +163,15 @@ class VarlenBlock(nn.Module):
             self.ls1, self.ls2 = nn.Identity(), nn.Identity()
 
         self.drop_path = DropPath(drop_path)
+        linear1 = nn.Linear(dim, hidden, bias=False)
+        match activation:
+            case "gelu":
+                act = nn.GELU()
+            case "relu2":
+                act = SquaredReLU()
+            case "derf":
+                act = Derf(dim)
+        self.mlp = nn.Sequential(linear1, act, nn.Linear(hidden, dim, bias=False))
 
         if sparse and hidden % 128 == 0:
             # FIXME: couldn't get to work.
@@ -179,15 +179,9 @@ class VarlenBlock(nn.Module):
             # but even then, backwards pass get shapes wrong and panics
             # Also currently incompatible with fp8 training
             self.mlp = nn.Sequential(
-                nn.Linear(dim, hidden, bias=False),
-                SquaredReLU(),  # 2402.03804
+                linear1,
+                SquaredReLU(),
                 SemiSparseActivationLinear(hidden, dim, bias=False),
-            )
-        else:
-            self.mlp = nn.Sequential(
-                nn.Linear(dim, hidden, bias=False),
-                nn.GELU(),
-                nn.Linear(hidden, dim, bias=False),
             )
 
     def forward(

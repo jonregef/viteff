@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.DEBUG, format="%(message)s", handlers=[RichHan
 for _ in ["cutlass", "torchao", "httpcore", "spdl", "filelock", "asyncio", "PIL"]:
     logging.getLogger(_).setLevel(logging.WARNING)
 
-from src.augmentation import imagenet_train_augs
+from src.augmentation import build_augmentation
 from src.config import RunConfig
 from src.dataloader import build_webdataset_dataloader, BatchSizeCurriculum
 from src.hooks import CheckpointHook, Hook, LoggingHook, TrainerState, ValidationHook
@@ -26,10 +26,22 @@ from src.utils import seed_everything
 
 @torch.inference_mode()
 def validate(
-    model: nn.Module, *, urls: list[str], batch_size: int, threads: int, seed: int
+    model: nn.Module,
+    *,
+    urls: list[str],
+    batch_size: int,
+    threads: int,
+    seed: int,
+    resolution_cap: int,
 ) -> dict[str, float]:
     dataloader = build_webdataset_dataloader(
-        urls, batch_size=batch_size, threads=threads, augs=None, train=False, seed=seed
+        urls,
+        batch_size=batch_size,
+        threads=threads,
+        augs=None,
+        train=False,
+        seed=seed,
+        resolution_cap=resolution_cap,
     )
     was_training = model.training
     model.eval()
@@ -113,9 +125,14 @@ def train(config: RunConfig) -> None:
         train_urls,
         train=True,
         threads=config.data.threads,
-        augs=imagenet_train_augs,
+        augs=build_augmentation(
+            name=config.augmentation.recipe,
+            magnitude=config.augmentation.magnitude,
+            with_flip=config.augmentation.with_flip,
+        ),
         seed=config.seed,
         batch_size=state.curriculum.at(0),
+        resolution_cap=config.data.resolution_cap,
     )
 
     hooks: list[Hook] = [
@@ -137,6 +154,7 @@ def train(config: RunConfig) -> None:
                 batch_size=config.validation.batch_size,
                 threads=config.data.threads,
                 seed=config.seed,
+                resolution_cap=config.validation.resolution_cap,
             ),
         ),
     ]

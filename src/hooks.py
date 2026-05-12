@@ -28,7 +28,7 @@ class TrainerState:
 
     @property
     def now(self) -> int:
-        return self.step if self.unit == "step" else self.epoch
+        return (self.step if self.unit == "step" else self.epoch) + 1
 
 
 class Hook:

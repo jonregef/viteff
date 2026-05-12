@@ -48,7 +48,9 @@ class VarlenVisionTransformer(nn.Module):
         patch_method: Literal["resize", "drop", "random"] = "resize",
         with_ape: bool = False,
         drop_path: float = 0.0,
-        mlp_ratio: int = 4,
+        mlp_ratio: float = 4.0,
+        layerscale: float | None = None,
+        activation: Literal["gelu", "relu2", "derf"] = "gelu",
     ) -> None:
         super().__init__()
         self.dim = dim
@@ -74,7 +76,8 @@ class VarlenVisionTransformer(nn.Module):
                 dim,
                 num_heads=atten_heads,
                 mlp_ratio=mlp_ratio,
-                layerscale=1e-4,
+                layerscale=layerscale,
+                activation=activation,
                 sparse=sparse,
                 drop_path=rate,
             )
@@ -103,6 +106,7 @@ class ClassificationViT(nn.Module):
         super().__init__()
         self.num_classes = num_classes
         self.backbone = backbone
+        self.smooth = smooth
         match method:
             case "register":
                 if backbone.registers < 1:
@@ -116,7 +120,7 @@ class ClassificationViT(nn.Module):
             case "ce":
                 self.loss = nn.CrossEntropyLoss(label_smoothing=smooth)
             case "bce":
-                self.loss = nn.BCEWithLogitsLoss()
+                self.loss = nn.BCEWithLogitsLoss(reduction="none")
 
     def forward(self, images: list[Tensor]) -> Tensor:
         return self.head(*self.backbone(images))
@@ -125,16 +129,24 @@ class ClassificationViT(nn.Module):
         self, images: list[Tensor], labels: Tensor
     ) -> dict[str, Tensor]:
         logits = self.forward(images)
-        if isinstance(self.loss, nn.BCEWithLogitsLoss) and len(labels.shape) == 1:
-            onehot = torch.nn.functional.one_hot(labels, self.num_classes).to(logits)
-            loss = self.loss(logits, onehot)
-        else:
-            loss = self.loss(logits, labels)
+        match self.loss:
+            case nn.BCEWithLogitsLoss():
+                if labels.ndim == 1:
+                    targets = nn.functional.one_hot(labels, self.num_classes).to(logits)
+                else:
+                    targets = labels.to(logits)
+                if self.smooth > 0:
+                    s, n = self.smooth, self.num_classes
+                    targets = targets * (1 - s) + s / n
+                loss = self.loss(logits, targets).sum(-1).mean()
+            case nn.CrossEntropyLoss():
+                loss = self.loss(logits, labels)
+        hard_labels = labels if labels.ndim == 1 else labels.argmax(-1)
         top5_pred = logits.topk(min(5, logits.size(-1)), dim=-1).indices
         return {
             "loss": loss,
-            "top1": (top5_pred[:, 0] == labels).float().mean(),
-            "top5": (top5_pred == labels.unsqueeze(-1)).any(-1).float().mean(),
+            "top1": (top5_pred[:, 0] == hard_labels).float().mean(),
+            "top5": (top5_pred == hard_labels.unsqueeze(-1)).any(-1).float().mean(),
         }
 
 
@@ -157,6 +169,8 @@ def build_model(max_seq_len: int, use_fp8: bool, config: ModelConfig) -> nn.Modu
         with_ape=config.with_ape,
         drop_path=config.drop_path,
         mlp_ratio=config.mlp_ratio,
+        layerscale=config.layerscale,
+        activation=config.activation,
     )
     match config.head:
         case ClassificationConfig():
